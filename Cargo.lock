@@ -2433,7 +2433,6 @@ dependencies = [
  "taky-common",
  "taky-config",
  "taky-pki",
- "taky-server",
  "taky-xml",
  "tempfile",
  "uuid",

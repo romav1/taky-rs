@@ -1,0 +1,133 @@
+# taky-rs Docker image (ADR-007, T-12): linux/amd64, linux/arm64, linux/arm/v7 from musl binaries
+# (no compiling under qemu). Pushed to GHCR ONLY on tags v*; other runs build and smoke-test only.
+# Image: ghcr.io/<repository owner, lowercased>/taky-rs — derived from github context, no hard-coded owner.
+name: docker
+
+on:
+  push:
+    tags: ["v*"]
+    branches: ["main", "master"]
+    paths:
+      - "packaging/docker/**"
+      - ".github/workflows/docker.yml"
+      - "scripts/build-all.sh"
+  pull_request:
+    paths:
+      - "packaging/docker/**"
+      - ".github/workflows/docker.yml"
+      - "scripts/build-all.sh"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  RUST_TOOLCHAIN: "1.97"
+  CARGO_TERM_COLOR: always
+  ZIGLANG_VERSION: "0.17.0"
+  CARGO_ZIGBUILD_VERSION: "0.24.0"
+
+jobs:
+  musl:
+    name: build ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - x86_64-unknown-linux-musl
+          - aarch64-unknown-linux-musl
+          - armv7-unknown-linux-musleabihf
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust ${{ env.RUST_TOOLCHAIN }} + ${{ matrix.target }}
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal -t "${{ matrix.target }}"
+          rustup default "$RUST_TOOLCHAIN"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      - name: Install zig + cargo-zigbuild
+        run: |
+          python3 -m venv "$RUNNER_TEMP/zig-venv"
+          "$RUNNER_TEMP/zig-venv/bin/pip" install -q "ziglang==${ZIGLANG_VERSION}" "cargo-zigbuild==${CARGO_ZIGBUILD_VERSION}"
+          echo "$RUNNER_TEMP/zig-venv/bin" >> "$GITHUB_PATH"
+      - name: scripts/build-all.sh --strict ${{ matrix.target }}
+        run: scripts/build-all.sh --strict "${{ matrix.target }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: docker-${{ matrix.target }}
+          path: dist/docker/
+          if-no-files-found: error
+          retention-days: 3
+
+  image:
+    name: buildx (amd64, arm64, arm/v7)
+    needs: musl
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    env:
+      PUSH: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: docker-*
+          path: dist/docker
+          merge-multiple: true
+      - name: Check build context
+        run: |
+          ls -lR dist/docker
+          for a in amd64 arm64 armv7; do
+            for b in taky-rs taky_dps-rs takyctl-rs LICENSE; do
+              test -f "dist/docker/$a/$b" || { echo "::error::missing dist/docker/$a/$b"; exit 1; }
+            done
+          done
+      - name: Image name (lowercase owner)
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/taky-rs" >> "$GITHUB_ENV"
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - name: Image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha
+      # Smoke test (every run): amd64 image loads, runs as non-root and answers --version.
+      - name: Build amd64 for smoke test
+        uses: docker/build-push-action@v6
+        with:
+          context: dist/docker
+          file: packaging/docker/Dockerfile
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: taky-rs:smoke
+      - name: Smoke test
+        run: |
+          user="$(docker image inspect taky-rs:smoke --format '{{.Config.User}}')"
+          echo "image user: $user"
+          [[ "$user" == "65532:65532" ]] || { echo "::error::image must run as 65532:65532"; exit 1; }
+          docker run --rm taky-rs:smoke taky-rs --version
+          docker run --rm taky-rs:smoke taky_dps-rs --version
+          docker run --rm taky-rs:smoke takyctl-rs --version
+      - name: Log in to GHCR
+        if: env.PUSH == 'true'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build multi-arch${{ env.PUSH == 'true' && ' and push' || '' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: dist/docker
+          file: packaging/docker/Dockerfile
+          platforms: linux/amd64,linux/arm64,linux/arm/v7
+          push: ${{ env.PUSH == 'true' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

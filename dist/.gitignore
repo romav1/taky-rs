@@ -1,0 +1,3 @@
+# Build output of scripts/build-all.sh (not committed).
+*
+!.gitignore

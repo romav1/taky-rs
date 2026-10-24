@@ -1,0 +1,189 @@
+# taky-rs CI (ADR-007, T-12): quality gate, cross builds for the six release targets,
+# tests and smoke runs under qemu, and a GitHub release on tags v*.
+# Repo-agnostic: uses only github.* context and GITHUB_TOKEN.
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+env:
+  RUST_TOOLCHAIN: "1.97"
+  CARGO_TERM_COLOR: always
+  ZIGLANG_VERSION: "0.17.0"
+  CARGO_ZIGBUILD_VERSION: "0.24.0"
+
+jobs:
+  check:
+    name: check (fmt, clippy, test, deny)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust ${{ env.RUST_TOOLCHAIN }}
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal -c rustfmt,clippy
+          rustup default "$RUST_TOOLCHAIN"
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      # CI=true is set by GitHub Actions: check.sh fails if cargo-deny is missing (review-T-10 N-4).
+      - name: scripts/check.sh
+        run: scripts/check.sh
+
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-unknown-linux-gnu
+          - x86_64-unknown-linux-musl
+          - aarch64-unknown-linux-gnu
+          - aarch64-unknown-linux-musl
+          - armv7-unknown-linux-gnueabihf
+          - armv7-unknown-linux-musleabihf
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust ${{ env.RUST_TOOLCHAIN }} + ${{ matrix.target }}
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal -t "${{ matrix.target }}"
+          rustup default "$RUST_TOOLCHAIN"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+      # venv: ubuntu-latest's system Python is externally managed (PEP 668).
+      - name: Install zig + cargo-zigbuild
+        run: |
+          python3 -m venv "$RUNNER_TEMP/zig-venv"
+          "$RUNNER_TEMP/zig-venv/bin/pip" install -q "ziglang==${ZIGLANG_VERSION}" "cargo-zigbuild==${CARGO_ZIGBUILD_VERSION}"
+          echo "$RUNNER_TEMP/zig-venv/bin" >> "$GITHUB_PATH"
+      - name: scripts/build-all.sh --strict ${{ matrix.target }}
+        run: scripts/build-all.sh --strict "${{ matrix.target }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: taky-rs-${{ matrix.target }}
+          path: |
+            dist/taky-rs-${{ matrix.target }}.tar.gz
+            dist/docker/
+          if-no-files-found: error
+          retention-days: 14
+
+  test-arm:
+    name: cross test ${{ matrix.target }} (qemu)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - aarch64-unknown-linux-gnu
+          - armv7-unknown-linux-gnueabihf
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust ${{ env.RUST_TOOLCHAIN }} + ${{ matrix.target }}
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal -t "${{ matrix.target }}"
+          rustup default "$RUST_TOOLCHAIN"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: cross-${{ matrix.target }}
+      - name: Install cross
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+      # Sans-IO crates (ADR-007); cross runs the test binaries under qemu-user in its Docker image.
+      - name: cross test
+        run: cross test --locked --target "${{ matrix.target }}" -p taky-cot -p taky-config -p taky-xml
+
+  smoke:
+    name: smoke ${{ matrix.target }}
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: x86_64-unknown-linux-gnu, qemu: "", sysroot: "", glibc: true }
+          - { target: x86_64-unknown-linux-musl, qemu: "", sysroot: "", glibc: false }
+          - { target: aarch64-unknown-linux-gnu, qemu: qemu-aarch64, sysroot: /usr/aarch64-linux-gnu, glibc: true }
+          - { target: aarch64-unknown-linux-musl, qemu: qemu-aarch64, sysroot: "", glibc: false }
+          - { target: armv7-unknown-linux-gnueabihf, qemu: qemu-arm, sysroot: /usr/arm-linux-gnueabihf, glibc: true }
+          - { target: armv7-unknown-linux-musleabihf, qemu: qemu-arm, sysroot: "", glibc: false }
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: taky-rs-${{ matrix.target }}
+          path: artifact
+      - name: Install qemu-user, cross libc, binutils
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-user binutils-multiarch file libc6-arm64-cross libc6-armhf-cross
+      - name: Unpack
+        run: tar -xzf "artifact/taky-rs-${{ matrix.target }}.tar.gz"
+      - name: Inspect ELF (architecture, static linking for musl)
+        run: |
+          file "${{ matrix.target }}"/taky-rs "${{ matrix.target }}"/taky_dps-rs "${{ matrix.target }}"/takyctl-rs
+          if [[ "${{ matrix.glibc }}" == "false" ]]; then
+            for b in taky-rs taky_dps-rs takyctl-rs; do
+              file "${{ matrix.target }}/$b" | grep -Eq 'statically linked|static-pie linked' \
+                || { echo "::error::$b is not statically linked"; exit 1; }
+            done
+          fi
+      - name: Required glibc <= 2.28
+        if: matrix.glibc
+        run: |
+          for b in taky-rs taky_dps-rs takyctl-rs; do
+            max="$(objdump -T "${{ matrix.target }}/$b" | grep -o 'GLIBC_[0-9.]*' | sed 's/GLIBC_//' | sort -uV | tail -1)"
+            echo "$b: max GLIBC_$max"
+            if [[ "$(printf '%s\n2.28\n' "$max" | sort -V | tail -1)" != "2.28" ]]; then
+              echo "::error::$b requires GLIBC_$max (> 2.28)"; exit 1
+            fi
+          done
+      - name: --version (native or qemu-user)
+        env:
+          SYSROOT: ${{ matrix.sysroot }}
+        run: |
+          if [[ -n "$SYSROOT" ]]; then export QEMU_LD_PREFIX="$SYSROOT"; fi
+          for b in taky-rs taky_dps-rs takyctl-rs; do
+            if [[ -n "${{ matrix.qemu }}" ]]; then
+              ${{ matrix.qemu }} "${{ matrix.target }}/$b" --version
+            else
+              "${{ matrix.target }}/$b" --version
+            fi
+          done
+
+  release:
+    name: GitHub release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [check, build, test-arm, smoke]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: taky-rs-*
+          path: artifacts
+          merge-multiple: true
+      - name: SHA256SUMS
+        working-directory: artifacts
+        run: sha256sum taky-rs-*.tar.gz | tee SHA256SUMS
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes \
+            artifacts/taky-rs-*.tar.gz artifacts/SHA256SUMS

@@ -15,9 +15,8 @@ path = "src/main.rs"
 [dependencies]
 taky-common.workspace = true
 taky-config.workspace = true
-taky-pki.workspace = true
+taky-pki = { workspace = true, features = ["gen"] }
 taky-xml.workspace = true
-taky-server.workspace = true
 clap.workspace = true
 anyhow.workspace = true
 serde_json.workspace = true
