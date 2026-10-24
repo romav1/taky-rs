@@ -12,5 +12,10 @@ publish.workspace = true
 quick-xml.workspace = true
 thiserror.workspace = true
 
+[dev-dependencies]
+serde_json.workspace = true
+proptest.workspace = true
+taky-common = { workspace = true, features = ["testkit"] }
+
 [lints]
 workspace = true

@@ -11,6 +11,8 @@ pub struct Limits {
     pub max_attrs: usize,
     /// Maximum length of a tag/attribute name in bytes (1 KiB).
     pub max_name: usize,
+    /// Maximum number of nodes (elements, comments, PIs) in one top-level element (100 000).
+    pub max_nodes: usize,
 }
 
 impl Limits {
@@ -20,6 +22,7 @@ impl Limits {
         max_depth: 256,
         max_attrs: 256,
         max_name: 1024,
+        max_nodes: 100_000,
     };
 }
 
