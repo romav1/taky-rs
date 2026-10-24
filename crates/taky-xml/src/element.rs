@@ -9,6 +9,10 @@ pub struct Element {
     /// Tag in Clark notation: `"{ns}local"` or `"local"`.
     pub tag: String,
     /// Attributes in document order (names in Clark notation).
+    ///
+    /// Invariant (ADR-002 rev. 3 §2): [`Element::attr_prefixes`] holds indices into this vector.
+    /// Code that removes or reorders attributes must re-index `attr_prefixes` (or clear the
+    /// affected entries); appending and replacing values in place (as [`Element::set`] does) is safe.
     pub attrs: Vec<(String, String)>,
     /// Text before the first child node.
     pub text: Option<String>,

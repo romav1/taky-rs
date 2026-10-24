@@ -60,7 +60,9 @@ pub struct DpSect {
 pub struct SslSect {
     /// `enabled`.
     pub enabled: bool,
-    /// `client_cert_required`.
+    /// `client_cert_required`. Informative only: an invalid value is not an error in
+    /// `load_config` (Python parity) and reads as `true`; the CoT server must validate the raw
+    /// value with `cfg.raw().getboolean("ssl", "client_cert_required")` when SSL is enabled.
     pub client_cert_required: bool,
     /// `ca` (PEM; empty — system roots).
     pub ca: Option<PathBuf>,
@@ -289,17 +291,13 @@ fn build(
             Err(_) => RedisSetting::Url(v),
         },
     };
-    // `client_cert_required` is not validated by `load_config` (Python: only the CoT server's
-    // `getboolean` fails, with SSL). A bad value keeps the secure default `true` here.
-    let client_cert_required = match ini.getboolean("ssl", "client_cert_required") {
-        Ok(b) => b,
-        Err(e) => {
-            if ssl_enabled {
-                tracing::warn!(target: "load_config", "ssl.client_cert_required: {e}; using True");
-            }
-            true
-        }
-    };
+    // `client_cert_required` is not validated by `load_config` and nothing is logged (Python
+    // parity: only the CoT server's `getboolean` fails, server.py:149, with SSL enabled). A bad
+    // value keeps the secure default `true` here; taky-server validates via `raw().getboolean`
+    // (review-3A D-b).
+    let client_cert_required = ini
+        .getboolean("ssl", "client_cert_required")
+        .unwrap_or(true);
     let taky = TakySect {
         hostname: get("taky", "hostname")?.unwrap_or_default(),
         node_id: get("taky", "node_id")?.unwrap_or_default(),

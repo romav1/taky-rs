@@ -58,6 +58,9 @@ STREAM_CASES = {
     "pi_forms": ["<event><?p?><?q ?><?r  d ?><!----></event>"],
     "whitespace_layout": ["<event>\n  <point lat='1'/>\n  <detail>\n    <x/>\n  </detail>\n</event>\n"],
     "mixed_pretty": ["<event><a><b/>t<c><d/></c></a><e><f/></e><!--c--><?p d?><g/></event>"],
+    "qname_malformed_attrs": ['<event xmlns:a="u" a:b:c="1" :a="2" a:="3" xmlns:="v" x="4"/>'],
+    "qname_malformed_elems": ['<event xmlns:a="u"><a:b:c q="1"/><a: q="1"/><:x/><w xmlns="d"><b:c:d/></w></event>'],
+    "qname_two_prefixes_same_uri": ['<event xmlns:a="u" xmlns:b="u" a:x="1" b:x="2"/>'],
     "deep_pretty": ["<event>" + "<a>" * 70 + "</a>" * 70 + "</event>"],
 }
 

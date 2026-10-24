@@ -66,6 +66,23 @@ CASES = {
     # unknown entity (V017): the event disappears, nothing else in the same chunk is visible
     "unknown_entity_text": ["<event a='1'><r>&foo;</r></event>"],
     "unknown_entity_attr": ["<event a='&foo;'/>"],
+    # malformed QNames (review-3A N-3): kept verbatim as unprefixed names, elements still get
+    # the default namespace; duplicates are errors; `xmlns:` is a plain attribute
+    "qname_two_colons_attr": ['<event a:b:c="1" x="2"/>'],
+    "qname_empty_prefix_attr": ['<event :a="1" x="2"/>'],
+    "qname_xmlns_colon": ['<event xmlns:="u" x="2"/>'],
+    "qname_empty_local_attr": ['<event a:="1" x="2"/>'],
+    "qname_two_colons_attr_declared": ['<event xmlns:a="u" a:b:c="1" x="2"/>'],
+    "qname_empty_local_attr_declared": ['<event xmlns:a="u" a:="1" x="2"/>'],
+    "qname_two_colons_elem": ['<event xmlns:a="u"><a:b:c q="1"/></event>'],
+    "qname_empty_local_elem": ['<event xmlns:a="u"><a: q="1"/></event>'],
+    "qname_empty_prefix_elem": ['<event><:x/></event>'],
+    "qname_dup_declared": ['<event xmlns:a="u" a:b="1" a:b="2"/>'],
+    "qname_dup_expanded_two_prefixes": ['<event xmlns:a="u" xmlns:b="u" a:x="1" b:x="2"/>'],
+    "qname_dup_malformed": ['<event a:b:c="1" x="2" a:b:c="3"/>'],
+    "qname_dup_xmlns_colon": ['<event xmlns:="u" xmlns:="v"/>'],
+    "qname_malformed_default_ns": ['<event><w xmlns="d" a:="1"><:x/><a:/><b:c:d/></w></event>'],
+    "qname_malformed_event_tags": ['<a:b:event/><:event/><event:/><event a="1"/>'],
     # known divergences (listed in tests/lxml_oracle.rs DIVERGENCES, Rust outcome in tests/stream.rs)
     "quirk_unknown_entity_restart": ["<event a='1'>&foo;</event><event a='2'/>", "<event a='3'/>", "<event a='4'/>"],
     "quirk_bare_amp_zombie": ["<event>&</event>", "<event a='1'/>"],
@@ -92,6 +109,9 @@ DOC_CASES = {
     "pi_comment_around": "<?pi x?><!-- a --><event/><?pi y?>",
     "upper_xml_pi": "<?XML v?><event/>",
     "text_before_root": "x<event/>",
+    "qname_two_colons": "<event a:b:c='1'/>",
+    "qname_xmlns_colon": "<event xmlns:='u'/>",
+    "qname_empty_prefix_elem": "<event><:x/></event>",
     "eol_refs": "<e a='1\r\n2&#10;'>a\r\nb&#13;&amp;&lt;</e>",
 }
 

@@ -3173,6 +3173,102 @@
    ]
   },
   {
+   "id": "qname_malformed_attrs",
+   "kind": "stream",
+   "source": "case",
+   "chunks_b64": [
+    "PGV2ZW50IHhtbG5zOmE9InUiIGE6YjpjPSIxIiA6YT0iMiIgYTo9IjMiIHhtbG5zOj0idiIgeD0iNCIvPg=="
+   ],
+   "outputs": [
+    {
+     "opts": {},
+     "expect": [
+      "<event xmlns:a=\"u\" a:b:c=\"1\" :a=\"2\" a:=\"3\" xmlns:=\"v\" x=\"4\"/>"
+     ]
+    },
+    {
+     "opts": {
+      "pretty_print": true
+     },
+     "expect": [
+      "<event xmlns:a=\"u\" a:b:c=\"1\" :a=\"2\" a:=\"3\" xmlns:=\"v\" x=\"4\"/>\n"
+     ]
+    },
+    {
+     "opts": {
+      "with_tail": false
+     },
+     "expect": [
+      "<event xmlns:a=\"u\" a:b:c=\"1\" :a=\"2\" a:=\"3\" xmlns:=\"v\" x=\"4\"/>"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "qname_malformed_elems",
+   "kind": "stream",
+   "source": "case",
+   "chunks_b64": [
+    "PGV2ZW50IHhtbG5zOmE9InUiPjxhOmI6YyBxPSIxIi8+PGE6IHE9IjEiLz48OngvPjx3IHhtbG5zPSJkIj48YjpjOmQvPjwvdz48L2V2ZW50Pg=="
+   ],
+   "outputs": [
+    {
+     "opts": {},
+     "expect": [
+      "<event xmlns:a=\"u\"><a:b:c q=\"1\"/><a: q=\"1\"/><:x/><w xmlns=\"d\"><b:c:d/></w></event>"
+     ]
+    },
+    {
+     "opts": {
+      "pretty_print": true
+     },
+     "expect": [
+      "<event xmlns:a=\"u\">\n  <a:b:c q=\"1\"/>\n  <a: q=\"1\"/>\n  <:x/>\n  <w xmlns=\"d\">\n    <b:c:d/>\n  </w>\n</event>\n"
+     ]
+    },
+    {
+     "opts": {
+      "with_tail": false
+     },
+     "expect": [
+      "<event xmlns:a=\"u\"><a:b:c q=\"1\"/><a: q=\"1\"/><:x/><w xmlns=\"d\"><b:c:d/></w></event>"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "qname_two_prefixes_same_uri",
+   "kind": "stream",
+   "source": "case",
+   "chunks_b64": [
+    "PGV2ZW50IHhtbG5zOmE9InUiIHhtbG5zOmI9InUiIGE6eD0iMSIgYjp4PSIyIi8+"
+   ],
+   "outputs": [
+    {
+     "opts": {},
+     "expect": [
+      "<event xmlns:a=\"u\" xmlns:b=\"u\" a:x=\"1\" b:x=\"2\"/>"
+     ]
+    },
+    {
+     "opts": {
+      "pretty_print": true
+     },
+     "expect": [
+      "<event xmlns:a=\"u\" xmlns:b=\"u\" a:x=\"1\" b:x=\"2\"/>\n"
+     ]
+    },
+    {
+     "opts": {
+      "with_tail": false
+     },
+     "expect": [
+      "<event xmlns:a=\"u\" xmlns:b=\"u\" a:x=\"1\" b:x=\"2\"/>"
+     ]
+    }
+   ]
+  },
+  {
    "id": "deep_pretty",
    "kind": "stream",
    "source": "case",

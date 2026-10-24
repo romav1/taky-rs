@@ -578,14 +578,19 @@ impl Tree {
     /// Clark name for `qname`; returns `(clark, namespace, local)`.
     ///
     /// An undeclared prefix keeps the raw `p:local` name (lxml pull parser); in document mode it
-    /// is an error, as `etree.fromstring` reports namespace errors.
+    /// is an error, as `etree.fromstring` reports namespace errors. A malformed QName (empty
+    /// prefix or local part, a second `:`) is a plain unprefixed name in the stream, as in libxml2
+    /// (an element still gets the default namespace), and an error in document mode.
     fn resolve<'q>(
         &self,
         qname: &'q str,
         attr: bool,
         off: u64,
     ) -> Result<(String, Option<String>, &'q str), XmlError> {
-        Ok(match qname.split_once(':') {
+        if self.mode == Mode::Document && qname.contains(':') && split_qname(qname).is_none() {
+            return Err(syntax(off, format!("Failed to parse QName '{qname}'")));
+        }
+        Ok(match split_qname(qname) {
             Some(("xml", local)) => (format!("{{{XML_NS}}}{local}"), Some(XML_NS.into()), local),
             Some((p, local)) => match self.lookup(Some(p)) {
                 Some(uri) => (format!("{{{uri}}}{local}"), Some(uri.to_owned()), local),
@@ -684,7 +689,7 @@ impl Tree {
                 return Err(syntax(off, "AttValue: invalid reference or char"));
             }
             let value = value.into_owned();
-            if key == "xmlns" || key.starts_with("xmlns:") {
+            if key == "xmlns" || matches!(split_qname(key), Some(("xmlns", _))) {
                 if key != "xmlns" && value.is_empty() && self.mode == Mode::Stream {
                     // `xmlns:p=""`: libxml2 reports a namespace error and drops it (not even
                     // considered for duplicates).
@@ -731,7 +736,7 @@ impl Tree {
         }
         for (i, (k, _)) in raw.iter().enumerate() {
             if raw[..i].iter().any(|(p, _)| p == k) {
-                let undeclared = match k.split_once(':') {
+                let undeclared = match split_qname(k) {
                     Some(("xml", _)) | None => false,
                     Some((p, _)) => self.lookup(Some(p)).is_none(),
                 };
@@ -744,7 +749,7 @@ impl Tree {
         let is_event = self.mode == Mode::Stream && local == "event" && ns.is_none();
         elem.tag = tag;
         elem.prefix = match ns.as_deref() {
-            Some(uri) if uri != XML_NS && !qname.contains(':') => Some(String::new()),
+            Some(uri) if uri != XML_NS && split_qname(qname).is_none() => Some(String::new()),
             ns => orig_prefix(qname, ns),
         };
         let mut attrs = Vec::with_capacity(raw.len());
@@ -855,9 +860,18 @@ impl Tree {
     }
 }
 
+/// `(prefix, local)` of a well-formed prefixed QName; `None` for an unprefixed name and for a
+/// malformed one (`:a`, `a:`, `a:b:c`), which libxml2 keeps verbatim as an unprefixed name.
+fn split_qname(qname: &str) -> Option<(&str, &str)> {
+    match qname.split_once(':') {
+        Some((p, l)) if !p.is_empty() && !l.is_empty() && !l.contains(':') => Some((p, l)),
+        _ => None,
+    }
+}
+
 /// Prefix of `qname` worth recording: only for a name resolved to a namespace other than `xml:`.
 fn orig_prefix(qname: &str, ns: Option<&str>) -> Option<String> {
-    match (qname.split_once(':'), ns) {
+    match (split_qname(qname), ns) {
         (Some((p, _)), Some(uri)) if uri != XML_NS => Some(p.to_owned()),
         _ => None,
     }

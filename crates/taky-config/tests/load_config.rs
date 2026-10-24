@@ -203,3 +203,22 @@ fn errors_and_percent() {
     let e = load_config_in(Some(&f), false, &cwd).unwrap_err();
     assert_eq!(e.py_class(), "UnicodeDecodeError");
 }
+
+/// review-3A N-1 / D-b: an invalid `ssl.client_cert_required` is not an error in `load_config`
+/// (Python is silent); the typed field reads `true`, the raw value is kept for taky-server.
+#[test]
+fn invalid_client_cert_required_is_lenient() {
+    let (_t, cwd) = cwd();
+    std::fs::write(
+        cwd.join("taky.conf"),
+        "[ssl]\nenabled = true\nclient_cert_required = maybe\n",
+    )
+    .unwrap();
+    let cfg = load_config_in(None, false, &cwd).unwrap();
+    assert!(cfg.ssl.enabled && cfg.ssl.client_cert_required);
+    assert_eq!(
+        raw(&cfg, "ssl", "client_cert_required").as_deref(),
+        Some("maybe")
+    );
+    assert!(cfg.raw().getboolean("ssl", "client_cert_required").is_err());
+}

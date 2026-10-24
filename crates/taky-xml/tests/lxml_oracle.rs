@@ -29,6 +29,17 @@ const DIVERGENCES: &[(&str, &str)] = &[
         "quirk_unterminated_charref",
         "libxml2 silently stops parsing for good; Rust: fatal error",
     ),
+    // D-23 (ADR-002 rev. 3 §1): the vectors pin the Rust outcome as `rust_expect`; checked
+    // against the D-23 rule in `d23_vector_outcomes` below.
+    (
+        "V054/A#1",
+        "D-23: unknown-entity restart quirk (as quirk_unknown_entity_restart)",
+    ),
+    ("V055/A#1", "D-23: bare '&' zombie quirk; Rust: fatal error"),
+    (
+        "V055/B#1",
+        "D-23: unterminated '&#65' zombie quirk; Rust: fatal error",
+    ),
 ];
 
 /// Accepted divergences of `parse_element` vs `etree.fromstring`.
@@ -120,6 +131,44 @@ fn documents_match_fromstring() {
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
     assert!(docs.len() >= 15);
+}
+
+/// Rust outcome of the D-23 vector connections (the lxml outcome differs, see DIVERGENCES):
+/// V054 — only the event with the unknown entity is dropped, M-2 (same chunk), M-3 and M-4 are
+/// emitted, no error; V055 — a malformed reference in text is a stream error on the first chunk.
+#[test]
+fn d23_vector_outcomes() {
+    let fx = fixture();
+    let item = |id: &str| {
+        fx["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["id"] == id)
+            .unwrap_or_else(|| panic!("{id} missing from the fixture"))
+            .clone()
+    };
+    let got = run(&chunks(&item("V054/A#1")));
+    assert_eq!(got.error_at, None, "{:?}", got.error);
+    let uids: Vec<Vec<&str>> = got
+        .events
+        .iter()
+        .map(|evs| {
+            evs.iter()
+                .map(|e| {
+                    let attrs = e["attrs"].as_array().unwrap();
+                    let uid = attrs.iter().find(|a| a[0] == "uid").unwrap();
+                    uid[1].as_str().unwrap()
+                })
+                .collect()
+        })
+        .collect();
+    assert_eq!(uids, vec![vec!["M-2"], vec!["M-3"], vec!["M-4"]]);
+    for id in ["V055/A#1", "V055/B#1"] {
+        let got = run(&chunks(&item(id)));
+        assert_eq!(got.error_at, Some(0), "{id}");
+        assert!(got.events.iter().all(Vec::is_empty), "{id}");
+    }
 }
 
 /// The fixture's vector inputs must be the current vectors (read via `taky_common::vectors`).
