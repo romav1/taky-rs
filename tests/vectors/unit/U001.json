@@ -1,0 +1,300 @@
+{
+  "id": "U001",
+  "title": "isoparse grammar as used for time/start/stale (event.py:52-56)",
+  "runner": "unit",
+  "kind": "isoparse",
+  "source_refs": [
+    "taky/taky/cot/models/event.py:51"
+  ],
+  "notes": "ok = naive datetime after replace(tzinfo=None) (offset DROPPED, not converted); cot = wire format. Rust reproduces fully (arch01, OQ-06).",
+  "cases": [
+    {
+      "input": "2030-01-01T00:00:00Z",
+      "expect": {
+        "ok": "2030-01-01T00:00:00.000000",
+        "cot": "2030-01-01T00:00:00.000Z"
+      }
+    },
+    {
+      "input": "2030-01-01T00:00:00.000Z",
+      "expect": {
+        "ok": "2030-01-01T00:00:00.000000",
+        "cot": "2030-01-01T00:00:00.000Z"
+      }
+    },
+    {
+      "input": "2030-01-01T00:00:00.123456Z",
+      "expect": {
+        "ok": "2030-01-01T00:00:00.123456",
+        "cot": "2030-01-01T00:00:00.123Z"
+      }
+    },
+    {
+      "input": "2030-01-01T00:00:00.1234567Z",
+      "expect": {
+        "ok": "2030-01-01T00:00:00.123456",
+        "cot": "2030-01-01T00:00:00.123Z"
+      }
+    },
+    {
+      "input": "2030-01-01T00:00:00.9999999Z",
+      "expect": {
+        "ok": "2030-01-01T00:00:00.999999",
+        "cot": "2030-01-01T00:00:00.999Z"
+      }
+    },
+    {
+      "input": "2030-01-01T00:00:00,5Z",
+      "expect": {
+        "ok": "2030-01-01T00:00:00.500000",
+        "cot": "2030-01-01T00:00:00.500Z"
+      }
+    },
+    {
+      "input": "2030-01-01T00:00:00.Z",
+      "expect": {
+        "error": "UnmarshalError",
+        "python_exception": "ValueError"
+      }
+    },
+    {
+      "input": "2030-01-01T00:00:00z",
+      "expect": {
+        "ok": "2030-01-01T00:00:00.000000",
+        "cot": "2030-01-01T00:00:00.000Z"
+      }
+    },
+    {
+      "input": "2030-01-01",
+      "expect": {
+        "ok": "2030-01-01T00:00:00.000000",
+        "cot": "2030-01-01T00:00:00.000Z"
+      }
+    },
+    {
+      "input": "2030-01",
+      "expect": {
+        "ok": "2030-01-01T00:00:00.000000",
+        "cot": "2030-01-01T00:00:00.000Z"
+      }
+    },
+    {
+      "input": "2030",
+      "expect": {
+        "ok": "2030-01-01T00:00:00.000000",
+        "cot": "2030-01-01T00:00:00.000Z"
+      }
+    },
+    {
+      "input": "20300101",
+      "expect": {
+        "ok": "2030-01-01T00:00:00.000000",
+        "cot": "2030-01-01T00:00:00.000Z"
+      }
+    },
+    {
+      "input": "20300101T000000Z",
+      "expect": {
+        "ok": "2030-01-01T00:00:00.000000",
+        "cot": "2030-01-01T00:00:00.000Z"
+      }
+    },
+    {
+      "input": "20300101T000000.5Z",
+      "expect": {
+        "ok": "2030-01-01T00:00:00.500000",
+        "cot": "2030-01-01T00:00:00.500Z"
+      }
+    },
+    {
+      "input": "2030-W01",
+      "expect": {
+        "ok": "2029-12-31T00:00:00.000000",
+        "cot": "2029-12-31T00:00:00.000Z"
+      }
+    },
+    {
+      "input": "2030-W01-3",
+      "expect": {
+        "ok": "2030-01-02T00:00:00.000000",
+        "cot": "2030-01-02T00:00:00.000Z"
+      }
+    },
+    {
+      "input": "2030W013",
+      "expect": {
+        "ok": "2030-01-02T00:00:00.000000",
+        "cot": "2030-01-02T00:00:00.000Z"
+      }
+    },
+    {
+      "input": "2030-001",
+      "expect": {
+        "ok": "2030-01-01T00:00:00.000000",
+        "cot": "2030-01-01T00:00:00.000Z"
+      }
+    },
+    {
+      "input": "2030-01-01T24:00:00Z",
+      "expect": {
+        "ok": "2030-01-02T00:00:00.000000",
+        "cot": "2030-01-02T00:00:00.000Z"
+      }
+    },
+    {
+      "input": "2030-01-01T24:00:01Z",
+      "expect": {
+        "error": "UnmarshalError",
+        "python_exception": "ValueError"
+      }
+    },
+    {
+      "input": "2030-01-01T03:00:00+03:00",
+      "expect": {
+        "ok": "2030-01-01T03:00:00.000000",
+        "cot": "2030-01-01T03:00:00.000Z"
+      }
+    },
+    {
+      "input": "2030-01-01T03:00:00-0530",
+      "expect": {
+        "ok": "2030-01-01T03:00:00.000000",
+        "cot": "2030-01-01T03:00:00.000Z"
+      }
+    },
+    {
+      "input": "2030-01-01T03:00:00+03",
+      "expect": {
+        "ok": "2030-01-01T03:00:00.000000",
+        "cot": "2030-01-01T03:00:00.000Z"
+      }
+    },
+    {
+      "input": "2030-01-01T03:00:00+3",
+      "expect": {
+        "error": "UnmarshalError",
+        "python_exception": "ValueError"
+      }
+    },
+    {
+      "input": "2030-01-01 00:00:00Z",
+      "expect": {
+        "ok": "2030-01-01T00:00:00.000000",
+        "cot": "2030-01-01T00:00:00.000Z"
+      }
+    },
+    {
+      "input": "2030-01-01T00:00",
+      "expect": {
+        "ok": "2030-01-01T00:00:00.000000",
+        "cot": "2030-01-01T00:00:00.000Z"
+      }
+    },
+    {
+      "input": "2030-01-01T00",
+      "expect": {
+        "ok": "2030-01-01T00:00:00.000000",
+        "cot": "2030-01-01T00:00:00.000Z"
+      }
+    },
+    {
+      "input": "2030-01-01T0000",
+      "expect": {
+        "ok": "2030-01-01T00:00:00.000000",
+        "cot": "2030-01-01T00:00:00.000Z"
+      }
+    },
+    {
+      "input": "2030-01-01T00:00:60Z",
+      "expect": {
+        "error": "UnmarshalError",
+        "python_exception": "ValueError"
+      }
+    },
+    {
+      "input": "2030-02-30T00:00:00Z",
+      "expect": {
+        "error": "UnmarshalError",
+        "python_exception": "ValueError"
+      }
+    },
+    {
+      "input": "2030-13-01",
+      "expect": {
+        "error": "UnmarshalError",
+        "python_exception": "ValueError"
+      }
+    },
+    {
+      "input": "0001-01-01T00:00:00Z",
+      "expect": {
+        "ok": "0001-01-01T00:00:00.000000",
+        "cot": "0001-01-01T00:00:00.000Z"
+      }
+    },
+    {
+      "input": "9999-12-31T23:59:59.999999Z",
+      "expect": {
+        "ok": "9999-12-31T23:59:59.999999",
+        "cot": "9999-12-31T23:59:59.999Z"
+      }
+    },
+    {
+      "input": "garbage",
+      "expect": {
+        "error": "UnmarshalError",
+        "python_exception": "ValueError"
+      }
+    },
+    {
+      "input": "",
+      "expect": {
+        "error": "UnmarshalError",
+        "python_exception": "ValueError"
+      }
+    },
+    {
+      "input": " 2030-01-01T00:00:00Z",
+      "expect": {
+        "error": "UnmarshalError",
+        "python_exception": "ValueError"
+      }
+    },
+    {
+      "input": "2030-01-01T00:00:00Z ",
+      "expect": {
+        "error": "UnmarshalError",
+        "python_exception": "ValueError"
+      }
+    },
+    {
+      "input": "T00:00:00",
+      "expect": {
+        "error": "UnmarshalError",
+        "python_exception": "ValueError"
+      }
+    },
+    {
+      "input": "2030-01-01T",
+      "expect": {
+        "error": "UnmarshalError",
+        "python_exception": "ValueError"
+      }
+    },
+    {
+      "input": null,
+      "expect": {
+        "error": "UnmarshalError",
+        "python_exception": "TypeError"
+      }
+    }
+  ],
+  "format": 2,
+  "verified_against": {
+    "oracle": "python taky 0.9 (tools/run_python_unit.py)",
+    "versions": [
+      "python 3.13.17",
+      "python-dateutil 3.0.0"
+    ]
+  }
+}

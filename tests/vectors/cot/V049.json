@@ -1,0 +1,136 @@
+{
+  "id": "V049",
+  "title": "TLS: mgmt kickban revokes in cert-db, kicks live session, blocks reconnect",
+  "runner": "cot",
+  "tags": [
+    "ssl",
+    "ban",
+    "mgmt"
+  ],
+  "source_refs": [
+    "taky/taky/cot/mgmt.py:57"
+  ],
+  "notes": "B2 reconnects with the same (now revoked) certificate as B and is dropped right after the TLS handshake.",
+  "now": "2030-01-01T00:00:00Z",
+  "config": {
+    "ssl": {
+      "enabled": "true"
+    },
+    "cot_server": {
+      "mon_ip": "127.0.0.1"
+    }
+  },
+  "clients": {
+    "A": {
+      "kind": "cot",
+      "cert": "alice"
+    },
+    "B": {
+      "kind": "cot",
+      "cert": "bob"
+    },
+    "B2": {
+      "kind": "cot",
+      "same_cert_as": "B"
+    }
+  },
+  "steps": [
+    {
+      "op": "connect",
+      "client": "A",
+      "expect": {
+        "deliveries": {}
+      }
+    },
+    {
+      "op": "connect",
+      "client": "B",
+      "expect": {
+        "deliveries": {}
+      }
+    },
+    {
+      "op": "send",
+      "client": "B",
+      "chunks": [
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><event version=\"2.0\" uid=\"ANDROID-B\" type=\"a-f-G-U-C\" time=\"2030-01-01T00:00:00.000Z\" start=\"2030-01-01T00:00:00.000Z\" stale=\"2030-01-01T00:10:00.000Z\" how=\"m-g\"><point lat=\"1.234567\" lon=\"-3.141592\" hae=\"-25.7\" ce=\"9.9\" le=\"9999999.0\"/><detail><takv os=\"29\" version=\"4.10.0\" device=\"PIXEL 7\" platform=\"ATAK-CIV\"/><contact endpoint=\"*:-1:stcp\" callsign=\"BOB\"/><uid Droid=\"BOB\"/><__group role=\"Team Member\" name=\"Cyan\"/><status battery=\"78\"/><track course=\"80.2\" speed=\"1.5\"/></detail></event>"
+      ],
+      "expect": {
+        "deliveries": {
+          "A": [
+            "<event version=\"2.0\" uid=\"ANDROID-B\" type=\"a-f-G-U-C\" how=\"m-g\" time=\"2030-01-01T00:00:00.000Z\" start=\"2030-01-01T00:00:00.000Z\" stale=\"2030-01-01T00:10:00.000Z\"><point lat=\"1.234567\" lon=\"-3.141592\" hae=\"-25.7\" ce=\"9.9\" le=\"9999999.0\"/><detail><takv os=\"29\" version=\"4.10.0\" device=\"PIXEL 7\" platform=\"ATAK-CIV\"/><contact endpoint=\"*:-1:stcp\" callsign=\"BOB\"/><uid Droid=\"BOB\"/><__group role=\"Team Member\" name=\"Cyan\"/><status battery=\"78\"/><track course=\"80.2\" speed=\"1.5\"/></detail></event>"
+          ]
+        }
+      }
+    },
+    {
+      "op": "mgmt",
+      "request": {
+        "cmd": "kickban",
+        "user": "bob"
+      },
+      "expect": {
+        "deliveries": {},
+        "server_closed": [
+          "B"
+        ],
+        "mgmt_response": {
+          "revoked_sns": [
+            "$SERIAL_INT:bob"
+          ]
+        }
+      }
+    },
+    {
+      "op": "mgmt",
+      "request": {
+        "cmd": "kickban",
+        "user": "bob"
+      },
+      "expect": {
+        "deliveries": {},
+        "mgmt_response": {
+          "revoked_sns": []
+        }
+      }
+    },
+    {
+      "op": "connect",
+      "client": "B2",
+      "expect": {
+        "deliveries": {},
+        "server_closed": [
+          "B2"
+        ]
+      }
+    }
+  ],
+  "final_expect_keys": [
+    "cert_db_status"
+  ],
+  "final_expect": {
+    "cert_db_status": {
+      "localhost": "V",
+      "alice": "V",
+      "bob": "R"
+    }
+  },
+  "format": 2,
+  "requires": [
+    "mgmt",
+    "tls"
+  ],
+  "verified_against": {
+    "oracle": "python taky 0.9 (tools/run_python.py)",
+    "versions": [
+      "python 3.13.17",
+      "lxml 6.1.3",
+      "libxml2 2.14.6",
+      "python-dateutil 3.0.0",
+      "cryptography 50.0.2",
+      "fakeredis 2.40.0",
+      "Flask 2.3.3",
+      "Werkzeug 3.1.9"
+    ]
+  }
+}

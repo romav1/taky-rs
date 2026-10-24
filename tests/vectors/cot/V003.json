@@ -1,0 +1,81 @@
+{
+  "id": "V003",
+  "title": "Event split mid-attribute and mid-UTF-8 sequence across 4 chunks",
+  "runner": "cot",
+  "tags": [
+    "parsing",
+    "utf8"
+  ],
+  "source_refs": [
+    "taky/taky/cot/client.py:278"
+  ],
+  "notes": "",
+  "now": "2030-01-01T00:00:00Z",
+  "config": {},
+  "clients": {
+    "A": {
+      "kind": "cot"
+    },
+    "B": {
+      "kind": "cot"
+    }
+  },
+  "steps": [
+    {
+      "op": "connect",
+      "client": "A",
+      "expect": {
+        "deliveries": {}
+      }
+    },
+    {
+      "op": "connect",
+      "client": "B",
+      "expect": {
+        "deliveries": {}
+      }
+    },
+    {
+      "op": "send",
+      "client": "A",
+      "chunks_b64": [
+        "PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0iVVRGLTgiIHN0YW5kYWxvbmU9InllcyI/PjxldmVudCB2ZXJzaW9uPSIyLjAiIHVpZD0iQU5EUk9JRC1BIiB0eXA=",
+        "ZT0iYS1mLUctVS1DIiB0aW1lPSIyMDMwLTAxLTAxVDAwOjAwOjAwLjAwMFoiIHN0YXJ0PSIyMDMwLTAxLTAxVDAwOjAwOjAwLjAwMFoiIHN0YWxlPSIyMDMwLTAxLTAxVDAwOjEwOjAwLjAwMFoiIGhvdz0ibS1nIj48cG9pbnQgbGF0PSIxLjIzNDU2NyIgbG9uPSItMy4xNDE1OTIiIGhhZT0iLTI1LjciIGNlPSI5LjkiIGxlPSI5OTk5OTk5LjAiLz48ZGV0YWlsPjx0YWt2IG9zPSIyOSIgdmVyc2lvbj0iNC4xMC4wIiBkZXZpY2U9IlBJWEVMIDciIHBsYXRmb3JtPSJBVEFLLUNJViIvPjxjb250YWN0IGVuZHBvaW50PSIqOi0xOnN0Y3AiIGNhbGxzaWduPSLDhExQSEEt0A==",
+        "liIvPjx1aWQgRHJvaWQ9IsOETFBIQS3QliIvPjxfX2dyb3VwIHJv",
+        "bGU9IlRlYW0gTWVtYmVyIiBuYW1lPSJDeWFuIi8+PHN0YXR1cyBiYXR0ZXJ5PSI3OCIvPjx0cmFjayBjb3Vyc2U9IjgwLjIiIHNwZWVkPSIxLjUiLz48L2RldGFpbD48L2V2ZW50Pg=="
+      ],
+      "expect": {
+        "deliveries": {
+          "B": [
+            "<event version=\"2.0\" uid=\"ANDROID-A\" type=\"a-f-G-U-C\" how=\"m-g\" time=\"2030-01-01T00:00:00.000Z\" start=\"2030-01-01T00:00:00.000Z\" stale=\"2030-01-01T00:10:00.000Z\"><point lat=\"1.234567\" lon=\"-3.141592\" hae=\"-25.7\" ce=\"9.9\" le=\"9999999.0\"/><detail><takv os=\"29\" version=\"4.10.0\" device=\"PIXEL 7\" platform=\"ATAK-CIV\"/><contact endpoint=\"*:-1:stcp\" callsign=\"&#196;LPHA-&#1046;\"/><uid Droid=\"&#196;LPHA-&#1046;\"/><__group role=\"Team Member\" name=\"Cyan\"/><status battery=\"78\"/><track course=\"80.2\" speed=\"1.5\"/></detail></event>"
+          ]
+        }
+      }
+    }
+  ],
+  "final_expect": {
+    "persist": {
+      "backend": "memory",
+      "uids": [
+        "ANDROID-A"
+      ]
+    }
+  },
+  "format": 2,
+  "requires": [
+    "persist-hook"
+  ],
+  "verified_against": {
+    "oracle": "python taky 0.9 (tools/run_python.py)",
+    "versions": [
+      "python 3.13.17",
+      "lxml 6.1.3",
+      "libxml2 2.14.6",
+      "python-dateutil 3.0.0",
+      "cryptography 50.0.2",
+      "fakeredis 2.40.0",
+      "Flask 2.3.3",
+      "Werkzeug 3.1.9"
+    ]
+  }
+}

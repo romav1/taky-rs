@@ -1,0 +1,86 @@
+{
+  "id": "D001",
+  "title": "Public endpoints need no identity: /, /Marti/api/version, /Marti/api/version/config",
+  "runner": "dps",
+  "source_refs": [
+    "taky/taky/dps/views/index.py:4",
+    "taky/taky/dps/views/version.py:5",
+    "taky/taky/dps/views/version.py:10"
+  ],
+  "notes": "",
+  "config": {
+    "taky": {
+      "hostname": "taky.example",
+      "node_id": "NODE-1"
+    },
+    "ssl": {
+      "enabled": "true"
+    }
+  },
+  "initial_files": {},
+  "steps": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/",
+        "identity": null
+      },
+      "expect": {
+        "status": 200,
+        "content_type": "text/html; charset=utf-8",
+        "body": "Hello, world!"
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/Marti/api/version",
+        "identity": null
+      },
+      "expect": {
+        "status": 200,
+        "content_type": "text/html; charset=utf-8",
+        "body": "taky-$VERSION"
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/Marti/api/version/config",
+        "identity": null
+      },
+      "expect": {
+        "status": 200,
+        "content_type": "application/json",
+        "body_json": {
+          "data": {
+            "api": "2",
+            "hostname": "taky.example",
+            "version": "taky-$VERSION"
+          },
+          "nodeId": "NODE-1",
+          "type": "ServerConfig",
+          "version": "2"
+        }
+      }
+    }
+  ],
+  "final_expect": {
+    "files": {}
+  },
+  "format": 2,
+  "requires": [
+    "tls"
+  ],
+  "verified_against": {
+    "oracle": "python taky 0.9 (tools/run_python_dps.py)",
+    "versions": [
+      "python 3.13.17",
+      "Flask 2.3.3",
+      "Werkzeug 3.1.9",
+      "lxml 6.1.3",
+      "cryptography 50.0.2",
+      "libxml2 2.14.6"
+    ]
+  }
+}

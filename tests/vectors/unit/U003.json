@@ -1,0 +1,580 @@
+{
+  "id": "U003",
+  "title": "taky.conf parsing/normalisation (configparser + load_config)",
+  "runner": "unit",
+  "kind": "ini",
+  "source_refs": [
+    "taky/taky/config.py:42"
+  ],
+  "notes": "load_config(path) not explicit. $CFG_DIR = realpath of the config directory. taky_output: config_error_message = 'Configuration file error: …' (exit 1), traceback = uncaught exception (exit 1), message = Rust readable message (D-13, exit 1).",
+  "expected-divergence": [
+    "D-13",
+    "D-14"
+  ],
+  "cases": [
+    {
+      "input": "[taky]\nhostname = a%%b\n",
+      "keys": [
+        "taky.hostname"
+      ],
+      "rust_expect": {
+        "values": {
+          "taky.hostname": "a%b"
+        }
+      },
+      "note": "D-14: %% -> %",
+      "expect": {
+        "error": "ValueError",
+        "taky_exit": 1,
+        "taky_output": "traceback"
+      }
+    },
+    {
+      "input": "[taky]\nhostname = a%b\n",
+      "keys": [
+        "taky.hostname"
+      ],
+      "rust_expect": {
+        "error": "InterpolationSyntaxError",
+        "taky_exit": 1,
+        "taky_output": "config_error_message"
+      },
+      "note": "D-14/D-13: single % -> Configuration file error, exit 1",
+      "expect": {
+        "error": "InterpolationSyntaxError",
+        "taky_exit": 1,
+        "taky_output": "traceback"
+      }
+    },
+    {
+      "input": "[ssl]\nserver_p12_pw = pa%ss\n",
+      "keys": [
+        "ssl.server_p12_pw"
+      ],
+      "rust_expect": {
+        "error": "InterpolationSyntaxError",
+        "taky_exit": 1,
+        "taky_output": "config_error_message"
+      },
+      "note": "D-14",
+      "expect": {
+        "error": "InterpolationSyntaxError",
+        "taky_exit": 1,
+        "taky_output": "traceback"
+      }
+    },
+    {
+      "input": "[taky]\nhostname = srv\nnode_id = %(hostname)s-n\n",
+      "keys": [
+        "taky.node_id"
+      ],
+      "expect": {
+        "values": {
+          "taky.node_id": "srv-n"
+        }
+      }
+    },
+    {
+      "input": "[taky]\nnode_id = %(hostname)s-n\n",
+      "keys": [
+        "taky.node_id"
+      ],
+      "note": "default hostname is visible to interpolation",
+      "expect": {
+        "values": {
+          "taky.node_id": "taky.local-n"
+        }
+      }
+    },
+    {
+      "input": "[taky]\nnode_id = %(nokey)s\n",
+      "keys": [
+        "taky.node_id"
+      ],
+      "rust_expect": {
+        "error": "InterpolationMissingOptionError",
+        "taky_exit": 1,
+        "taky_output": "config_error_message"
+      },
+      "note": "D-13",
+      "expect": {
+        "error": "InterpolationMissingOptionError",
+        "taky_exit": 1,
+        "taky_output": "traceback"
+      }
+    },
+    {
+      "input": "[taky]\n# 100% comment\nhostname = h\n",
+      "keys": [
+        "taky.hostname"
+      ],
+      "expect": {
+        "values": {
+          "taky.hostname": "h"
+        }
+      }
+    },
+    {
+      "input": "[taky]\nHostName = X\n",
+      "keys": [
+        "taky.hostname"
+      ],
+      "expect": {
+        "values": {
+          "taky.hostname": "X"
+        }
+      }
+    },
+    {
+      "input": "[TAKY]\nhostname = X\n",
+      "keys": [
+        "taky.hostname"
+      ],
+      "expect": {
+        "values": {
+          "taky.hostname": "taky.local"
+        }
+      }
+    },
+    {
+      "input": "[taky]\nredis\nbind_ip =\n",
+      "keys": [
+        "taky.redis",
+        "taky.bind_ip"
+      ],
+      "expect": {
+        "values": {
+          "taky.redis": null,
+          "taky.bind_ip": ""
+        }
+      }
+    },
+    {
+      "input": "[taky]\nhostname = h # inline\n",
+      "keys": [
+        "taky.hostname"
+      ],
+      "expect": {
+        "values": {
+          "taky.hostname": "h # inline"
+        }
+      }
+    },
+    {
+      "input": "[taky]\nhostname = h ; inline\n",
+      "keys": [
+        "taky.hostname"
+      ],
+      "expect": {
+        "values": {
+          "taky.hostname": "h ; inline"
+        }
+      }
+    },
+    {
+      "input": "[taky]\nhostname = \"q\"\n",
+      "keys": [
+        "taky.hostname"
+      ],
+      "expect": {
+        "values": {
+          "taky.hostname": "\"q\""
+        }
+      }
+    },
+    {
+      "input": "[taky]\nhostname: colon\n",
+      "keys": [
+        "taky.hostname"
+      ],
+      "expect": {
+        "values": {
+          "taky.hostname": "colon"
+        }
+      }
+    },
+    {
+      "input": "[taky]\nhostname = a\n  continued\n",
+      "keys": [
+        "taky.hostname"
+      ],
+      "expect": {
+        "values": {
+          "taky.hostname": "a\ncontinued"
+        }
+      }
+    },
+    {
+      "input": "[taky]\n  # indented comment\nhostname = a\n",
+      "keys": [
+        "taky.hostname"
+      ],
+      "expect": {
+        "values": {
+          "taky.hostname": "a"
+        }
+      }
+    },
+    {
+      "input": "[DEFAULT]\nhostname = d\n[cot_server]\n",
+      "keys": [
+        "taky.hostname",
+        "cot_server.hostname"
+      ],
+      "expect": {
+        "values": {
+          "taky.hostname": "taky.local",
+          "cot_server.hostname": "d"
+        }
+      }
+    },
+    {
+      "input": "[taky]\nhostname = a\nhostname = b\n",
+      "keys": [
+        "taky.hostname"
+      ],
+      "rust_expect": {
+        "error": "DuplicateOptionError",
+        "taky_exit": 1,
+        "taky_output": "message"
+      },
+      "note": "D-13",
+      "expect": {
+        "error": "DuplicateOptionError",
+        "taky_exit": 1,
+        "taky_output": "traceback"
+      }
+    },
+    {
+      "input": "[taky]\nhostname = a\n[taky]\n",
+      "keys": [
+        "taky.hostname"
+      ],
+      "rust_expect": {
+        "error": "DuplicateSectionError",
+        "taky_exit": 1,
+        "taky_output": "message"
+      },
+      "note": "D-13",
+      "expect": {
+        "error": "DuplicateSectionError",
+        "taky_exit": 1,
+        "taky_output": "traceback"
+      }
+    },
+    {
+      "input": "hostname = x\n",
+      "keys": [
+        "taky.hostname"
+      ],
+      "expect": {
+        "error": "MissingSectionHeaderError",
+        "taky_exit": 1,
+        "taky_output": "config_error_message"
+      }
+    },
+    {
+      "input": "﻿[taky]\nhostname = bom\n",
+      "keys": [
+        "taky.hostname"
+      ],
+      "expect": {
+        "error": "MissingSectionHeaderError",
+        "taky_exit": 1,
+        "taky_output": "config_error_message"
+      }
+    },
+    {
+      "input": "",
+      "keys": [
+        "taky.hostname",
+        "cot_server.port",
+        "taky.root_dir",
+        "dp_server.upload_path"
+      ],
+      "expect": {
+        "values": {
+          "taky.hostname": "taky.local",
+          "cot_server.port": "8087",
+          "taky.root_dir": "/var/taky",
+          "dp_server.upload_path": "/var/taky/dp-user"
+        }
+      }
+    },
+    {
+      "input": "[cot_server]\nport = 65535\n",
+      "keys": [
+        "cot_server.port"
+      ],
+      "rust_expect": {
+        "error": "ValueError",
+        "taky_exit": 1,
+        "taky_output": "message"
+      },
+      "note": "D-13",
+      "expect": {
+        "error": "ValueError",
+        "taky_exit": 1,
+        "taky_output": "traceback"
+      }
+    },
+    {
+      "input": "[cot_server]\nport = 65534\n",
+      "keys": [
+        "cot_server.port"
+      ],
+      "expect": {
+        "values": {
+          "cot_server.port": "65534"
+        }
+      }
+    },
+    {
+      "input": "[cot_server]\nport = 0\n",
+      "keys": [
+        "cot_server.port"
+      ],
+      "rust_expect": {
+        "error": "ValueError",
+        "taky_exit": 1,
+        "taky_output": "message"
+      },
+      "note": "D-13",
+      "expect": {
+        "error": "ValueError",
+        "taky_exit": 1,
+        "taky_output": "traceback"
+      }
+    },
+    {
+      "input": "[cot_server]\nport =  8_087 \n",
+      "keys": [
+        "cot_server.port"
+      ],
+      "expect": {
+        "values": {
+          "cot_server.port": "8087"
+        }
+      }
+    },
+    {
+      "input": "[cot_server]\nport = +80\n",
+      "keys": [
+        "cot_server.port"
+      ],
+      "expect": {
+        "values": {
+          "cot_server.port": "80"
+        }
+      }
+    },
+    {
+      "input": "[cot_server]\nport = 0x10\n",
+      "keys": [
+        "cot_server.port"
+      ],
+      "rust_expect": {
+        "error": "ValueError",
+        "taky_exit": 1,
+        "taky_output": "message"
+      },
+      "note": "D-13",
+      "expect": {
+        "error": "ValueError",
+        "taky_exit": 1,
+        "taky_output": "traceback"
+      }
+    },
+    {
+      "input": "[cot_server]\nport\n",
+      "keys": [
+        "cot_server.port"
+      ],
+      "expect": {
+        "values": {
+          "cot_server.port": "8087"
+        }
+      }
+    },
+    {
+      "input": "[cot_server]\nmax_persist_ttl =\n",
+      "keys": [
+        "cot_server.max_persist_ttl"
+      ],
+      "expect": {
+        "values": {
+          "cot_server.max_persist_ttl": "-1"
+        }
+      }
+    },
+    {
+      "input": "[cot_server]\nmax_persist_ttl = -5\n",
+      "keys": [
+        "cot_server.max_persist_ttl"
+      ],
+      "expect": {
+        "values": {
+          "cot_server.max_persist_ttl": "-5"
+        }
+      }
+    },
+    {
+      "input": "[cot_server]\nmax_persist_ttl = 1.5\n",
+      "keys": [
+        "cot_server.max_persist_ttl"
+      ],
+      "rust_expect": {
+        "error": "ValueError",
+        "taky_exit": 1,
+        "taky_output": "message"
+      },
+      "note": "D-13",
+      "expect": {
+        "error": "ValueError",
+        "taky_exit": 1,
+        "taky_output": "traceback"
+      }
+    },
+    {
+      "input": "[ssl]\nenabled = TRUE\n",
+      "keys": [
+        "ssl.enabled",
+        "cot_server.port",
+        "cot_server.mon_port",
+        "cot_server.mon_ip"
+      ],
+      "expect": {
+        "values": {
+          "ssl.enabled": "TRUE",
+          "cot_server.port": "8089",
+          "cot_server.mon_port": "8087",
+          "cot_server.mon_ip": null
+        }
+      }
+    },
+    {
+      "input": "[ssl]\nenabled = maybe\n",
+      "keys": [
+        "ssl.enabled"
+      ],
+      "rust_expect": {
+        "error": "ValueError",
+        "taky_exit": 1,
+        "taky_output": "message"
+      },
+      "note": "D-13",
+      "expect": {
+        "error": "ValueError",
+        "taky_exit": 1,
+        "taky_output": "traceback"
+      }
+    },
+    {
+      "input": "[ssl]\nenabled\n",
+      "keys": [
+        "ssl.enabled"
+      ],
+      "rust_expect": {
+        "error": "AttributeError",
+        "taky_exit": 1,
+        "taky_output": "message"
+      },
+      "note": "D-13: bare boolean key",
+      "expect": {
+        "error": "AttributeError",
+        "taky_exit": 1,
+        "taky_output": "traceback"
+      }
+    },
+    {
+      "input": "[cot_server]\nmon_ip = 127.0.0.1\nmon_port = abc\n",
+      "keys": [
+        "cot_server.mon_ip",
+        "cot_server.mon_port"
+      ],
+      "note": "no SSL: mon_port not validated, mon_ip forced None",
+      "expect": {
+        "values": {
+          "cot_server.mon_ip": null,
+          "cot_server.mon_port": "abc"
+        }
+      }
+    },
+    {
+      "input": "[ssl]\nenabled = on\n[cot_server]\nmon_ip = 127.0.0.1\nmon_port =\n",
+      "keys": [
+        "cot_server.mon_ip",
+        "cot_server.mon_port"
+      ],
+      "expect": {
+        "values": {
+          "cot_server.mon_ip": "127.0.0.1",
+          "cot_server.mon_port": "8087"
+        }
+      }
+    },
+    {
+      "input": "[ssl]\nenabled = yes\nca = ssl/ca.crt\ncert_db = ./db.txt\nkey = /abs/k\n[cot_server]\nlog_cot = logs\n[taky]\nroot_dir = .\n",
+      "keys": [
+        "ssl.ca",
+        "ssl.cert_db",
+        "ssl.key",
+        "cot_server.log_cot",
+        "taky.root_dir",
+        "dp_server.upload_path"
+      ],
+      "expect": {
+        "values": {
+          "ssl.ca": "$CFG_DIR/ssl/ca.crt",
+          "ssl.cert_db": "$CFG_DIR/db.txt",
+          "ssl.key": "/abs/k",
+          "cot_server.log_cot": "$CFG_DIR/logs",
+          "taky.root_dir": "$CFG_DIR",
+          "dp_server.upload_path": "/var/taky/dp-user"
+        }
+      }
+    },
+    {
+      "input": "[ssl]\nca = ssl/ca.crt\n",
+      "keys": [
+        "ssl.ca"
+      ],
+      "note": "relative ssl paths are NOT absolutized when SSL is off",
+      "expect": {
+        "values": {
+          "ssl.ca": "ssl/ca.crt"
+        }
+      }
+    },
+    {
+      "input": "[taky]\nredis = redis://localhost:6379/1\n",
+      "keys": [
+        "taky.redis"
+      ],
+      "expect": {
+        "values": {
+          "taky.redis": "redis://localhost:6379/1"
+        }
+      }
+    },
+    {
+      "input": "[unknown]\nx = 1\n[taky]\nfoo = bar\n",
+      "keys": [
+        "taky.foo"
+      ],
+      "expect": {
+        "values": {
+          "taky.foo": "bar"
+        }
+      }
+    }
+  ],
+  "format": 2,
+  "verified_against": {
+    "oracle": "python taky 0.9 (tools/run_python_unit.py)",
+    "versions": [
+      "python 3.13.17",
+      "python-dateutil 3.0.0"
+    ]
+  }
+}

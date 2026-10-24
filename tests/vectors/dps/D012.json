@@ -1,0 +1,87 @@
+{
+  "id": "D012",
+  "title": "Video feeds: GET empty, POST saves video_feed/<secure uid>.xml (ASCII + char refs), GET aggregates",
+  "runner": "dps",
+  "source_refs": [
+    "taky/taky/dps/views/video.py:11",
+    "taky/taky/dps/views/video.py:54"
+  ],
+  "notes": "",
+  "config": {
+    "taky": {
+      "hostname": "taky.example",
+      "node_id": "NODE-1"
+    },
+    "ssl": {
+      "enabled": "true"
+    }
+  },
+  "initial_files": {},
+  "steps": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/Marti/vcm",
+        "identity": {
+          "cn": "alice"
+        }
+      },
+      "expect": {
+        "status": 200,
+        "content_type": "text/html; charset=utf-8",
+        "body": "<?xml version='1.0' encoding='ASCII'?>\n<videoConnections/>"
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "path": "/Marti/vcm",
+        "identity": {
+          "cn": "alice"
+        },
+        "body": "<videoConnections><feed><uid> F1 </uid><alias>cam é</alias><address>1.2.3.4</address></feed><feed><alias>no uid</alias></feed></videoConnections>"
+      },
+      "expect": {
+        "status": 200,
+        "content_type": "text/html; charset=utf-8",
+        "body": ""
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/Marti/vcm",
+        "identity": {
+          "cn": "alice"
+        }
+      },
+      "expect": {
+        "status": 200,
+        "content_type": "text/xml; charset=utf-8",
+        "body": "<?xml version='1.0' encoding='ASCII'?>\n<videoConnections><feed><uid> F1 </uid><alias>cam &#233;</alias><address>1.2.3.4</address></feed></videoConnections>"
+      }
+    }
+  ],
+  "final_expect": {
+    "files": {
+      "video_feed/F1.xml": {
+        "content": "<?xml version='1.0' encoding='ASCII'?>\n<feed><uid> F1 </uid><alias>cam &#233;</alias><address>1.2.3.4</address></feed>"
+      }
+    }
+  },
+  "format": 2,
+  "requires": [
+    "tls"
+  ],
+  "verified_against": {
+    "oracle": "python taky 0.9 (tools/run_python_dps.py)",
+    "versions": [
+      "python 3.13.17",
+      "Flask 2.3.3",
+      "Werkzeug 3.1.9",
+      "lxml 6.1.3",
+      "cryptography 50.0.2",
+      "libxml2 2.14.6"
+    ]
+  }
+}

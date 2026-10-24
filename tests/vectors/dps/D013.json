@@ -1,0 +1,111 @@
+{
+  "id": "D013",
+  "title": "Video feeds errors: wrong root 400, non-feed child 400 (earlier feeds kept), malformed 400, empty uid 500",
+  "runner": "dps",
+  "source_refs": [
+    "taky/taky/dps/views/video.py:22"
+  ],
+  "notes": "D-15: Rust answers a feed with an empty <uid/> with 400 'Invalid XML document' instead of 500; nothing is written.",
+  "config": {
+    "taky": {
+      "hostname": "taky.example",
+      "node_id": "NODE-1"
+    },
+    "ssl": {
+      "enabled": "true"
+    }
+  },
+  "initial_files": {},
+  "steps": [
+    {
+      "request": {
+        "method": "POST",
+        "path": "/Marti/vcm",
+        "identity": {
+          "cn": "alice"
+        },
+        "body": "<foo/>"
+      },
+      "expect": {
+        "status": 400,
+        "content_type": "text/html; charset=utf-8",
+        "body": "Invalid XML document"
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "path": "/Marti/vcm",
+        "identity": {
+          "cn": "alice"
+        },
+        "body": "<videoConnections><feed><uid>K1</uid></feed><x/></videoConnections>"
+      },
+      "expect": {
+        "status": 400,
+        "content_type": "text/html; charset=utf-8",
+        "body": "Invalid XML document"
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "path": "/Marti/vcm",
+        "identity": {
+          "cn": "alice"
+        },
+        "body": "<<"
+      },
+      "expect": {
+        "status": 400,
+        "content_type": "text/html; charset=utf-8",
+        "body": "Malformed XML"
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "path": "/Marti/vcm",
+        "identity": {
+          "cn": "alice"
+        },
+        "body": "<videoConnections><feed><uid/></feed></videoConnections>"
+      },
+      "rust_expect": {
+        "status": 400,
+        "content_type": "text/html; charset=utf-8",
+        "body": "Invalid XML document"
+      },
+      "expect": {
+        "status": 500,
+        "content_type": "text/html; charset=utf-8",
+        "body_is_framework_page": true
+      }
+    }
+  ],
+  "expected-divergence": [
+    "D-15"
+  ],
+  "final_expect": {
+    "files": {
+      "video_feed/K1.xml": {
+        "content": "<?xml version='1.0' encoding='ASCII'?>\n<feed><uid>K1</uid></feed>"
+      }
+    }
+  },
+  "format": 2,
+  "requires": [
+    "tls"
+  ],
+  "verified_against": {
+    "oracle": "python taky 0.9 (tools/run_python_dps.py)",
+    "versions": [
+      "python 3.13.17",
+      "Flask 2.3.3",
+      "Werkzeug 3.1.9",
+      "lxml 6.1.3",
+      "cryptography 50.0.2",
+      "libxml2 2.14.6"
+    ]
+  }
+}

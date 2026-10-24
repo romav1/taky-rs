@@ -1,0 +1,95 @@
+{
+  "id": "D004",
+  "title": "Upload: secure_filename(creatorUid_filename), meta JSON, hash symlink, private, URL with double slash",
+  "runner": "dps",
+  "source_refs": [
+    "taky/taky/dps/views/datapackage.py:103",
+    "taky/taky/dps/views/datapackage.py:36",
+    "taky/taky/dps/views/datapackage.py:15"
+  ],
+  "notes": "",
+  "config": {
+    "taky": {
+      "hostname": "taky.example",
+      "node_id": "NODE-1"
+    },
+    "ssl": {
+      "enabled": "true"
+    }
+  },
+  "initial_files": {},
+  "steps": [
+    {
+      "request": {
+        "method": "POST",
+        "path": "/Marti/sync/missionupload",
+        "identity": {
+          "cn": "alice"
+        },
+        "query": {
+          "hash": "abc123",
+          "filename": "my pkg",
+          "creatorUid": "ANDROID-1"
+        },
+        "multipart": [
+          {
+            "name": "assetfile",
+            "filename": "my pkg ü.zip",
+            "content_type": "application/zip",
+            "data": "PK zipdata"
+          }
+        ]
+      },
+      "expect": {
+        "status": 200,
+        "content_type": "text/html; charset=utf-8",
+        "body": "https://taky.example:8443//Marti/sync/content?hash=abc123"
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/Marti/sync/search",
+        "identity": {
+          "cn": "alice"
+        }
+      },
+      "expect": {
+        "status": 200,
+        "content_type": "application/json",
+        "body_json": {
+          "resultCount": 0,
+          "results": []
+        }
+      }
+    }
+  ],
+  "final_expect": {
+    "files": {
+      "ANDROID-1_my_pkg_u.zip": {
+        "content": "PK zipdata"
+      },
+      "meta/ANDROID-1_my_pkg_u.zip.json": {
+        "content": "{\"UID\": \"ANDROID-1_my_pkg_u.zip\", \"Name\": \"my pkg \\u00fc.zip\", \"Hash\": \"abc123\", \"PrimaryKey\": 1, \"SubmissionDateTime\": \"$TIMESTAMP\", \"SubmissionUser\": \"alice\", \"CreatorUid\": \"ANDROID-1\", \"Keywords\": \"kw\", \"MIMEType\": \"application/zip\", \"Size\": 10, \"Visibility\": \"private\"}"
+      },
+      "meta/abc123.json": {
+        "symlink_to": "ANDROID-1_my_pkg_u.zip.json"
+      }
+    }
+  },
+  "format": 2,
+  "requires": [
+    "tls"
+  ],
+  "verified_against": {
+    "oracle": "python taky 0.9 (tools/run_python_dps.py)",
+    "versions": [
+      "python 3.13.17",
+      "Flask 2.3.3",
+      "Werkzeug 3.1.9",
+      "lxml 6.1.3",
+      "cryptography 50.0.2",
+      "libxml2 2.14.6"
+    ]
+  }
+}

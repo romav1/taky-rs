@@ -1,0 +1,101 @@
+{
+  "id": "V012",
+  "title": "Event without version attribute: as_element TypeError -> nobody receives it",
+  "runner": "cot",
+  "tags": [
+    "errors",
+    "bug"
+  ],
+  "source_refs": [
+    "taky/taky/cot/models/event.py:97",
+    "taky/taky/cot/client.py:309"
+  ],
+  "notes": "D-8: Rust does not deliver (as Python) and does NOT persist the version-less event (Python keeps NV-1 in memory).",
+  "now": "2030-01-01T00:00:00Z",
+  "config": {},
+  "clients": {
+    "A": {
+      "kind": "cot"
+    },
+    "B": {
+      "kind": "cot"
+    }
+  },
+  "steps": [
+    {
+      "op": "connect",
+      "client": "A",
+      "expect": {
+        "deliveries": {}
+      }
+    },
+    {
+      "op": "connect",
+      "client": "B",
+      "expect": {
+        "deliveries": {}
+      }
+    },
+    {
+      "op": "send",
+      "client": "A",
+      "chunks": [
+        "<event uid=\"NV-1\" type=\"a-u-G\" how=\"h-e\" time=\"2030-01-01T00:00:00.000Z\" start=\"2030-01-01T00:00:00.000Z\" stale=\"2030-01-01T00:10:00.000Z\"><point lat=\"1\" lon=\"1\" hae=\"1\" ce=\"1\" le=\"1\"/></event>"
+      ],
+      "expect": {
+        "deliveries": {}
+      }
+    },
+    {
+      "op": "send",
+      "client": "A",
+      "chunks": [
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><event version=\"2.0\" uid=\"M-1\" type=\"a-u-G\" time=\"2030-01-01T00:00:00.000Z\" start=\"2030-01-01T00:00:00.000Z\" stale=\"2030-01-01T00:10:00.000Z\" how=\"h-g-i-g-o\"><point lat=\"54.338986\" lon=\"9.755263\" hae=\"0.0\" ce=\"9999999.0\" le=\"9999999.0\"/><detail><contact callsign=\"Marker 1\"/></detail></event>"
+      ],
+      "expect": {
+        "deliveries": {
+          "B": [
+            "<event version=\"2.0\" uid=\"M-1\" type=\"a-u-G\" how=\"h-g-i-g-o\" time=\"2030-01-01T00:00:00.000Z\" start=\"2030-01-01T00:00:00.000Z\" stale=\"2030-01-01T00:10:00.000Z\"><point lat=\"54.338986\" lon=\"9.755263\" hae=\"0.0\" ce=\"9999999.0\" le=\"9999999.0\"/><detail><contact callsign=\"Marker 1\"/></detail></event>"
+          ]
+        }
+      }
+    }
+  ],
+  "expected-divergence": [
+    "D-8"
+  ],
+  "final_rust_expect": {
+    "persist": {
+      "backend": "memory",
+      "uids": [
+        "M-1"
+      ]
+    }
+  },
+  "final_expect": {
+    "persist": {
+      "backend": "memory",
+      "uids": [
+        "M-1",
+        "NV-1"
+      ]
+    }
+  },
+  "format": 2,
+  "requires": [
+    "persist-hook"
+  ],
+  "verified_against": {
+    "oracle": "python taky 0.9 (tools/run_python.py)",
+    "versions": [
+      "python 3.13.17",
+      "lxml 6.1.3",
+      "libxml2 2.14.6",
+      "python-dateutil 3.0.0",
+      "cryptography 50.0.2",
+      "fakeredis 2.40.0",
+      "Flask 2.3.3",
+      "Werkzeug 3.1.9"
+    ]
+  }
+}

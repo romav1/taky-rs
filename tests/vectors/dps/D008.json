@@ -1,0 +1,126 @@
+{
+  "id": "D008",
+  "title": "Download by hash: attachment with original Name; unknown hash -> 500 (KeyError); no hash -> 400",
+  "runner": "dps",
+  "source_refs": [
+    "taky/taky/dps/views/datapackage.py:80"
+  ],
+  "notes": "D-15: Rust answers an unknown hash with 404 'File not found' (as missionquery, D010) instead of 500.",
+  "config": {
+    "taky": {
+      "hostname": "taky.example",
+      "node_id": "NODE-1"
+    },
+    "ssl": {
+      "enabled": "true"
+    }
+  },
+  "initial_files": {
+    "U1_pkg.zip": {
+      "content": "DATA"
+    },
+    "meta/U1_pkg.zip.json": {
+      "content": "{\"UID\": \"U1_pkg.zip\", \"Name\": \"pkg.zip\", \"Hash\": \"h1\", \"PrimaryKey\": 1, \"SubmissionDateTime\": \"2030-01-01T00:00:00.000000Z\", \"SubmissionUser\": \"alice\", \"CreatorUid\": \"U1\", \"Keywords\": \"kw\", \"MIMEType\": \"application/zip\", \"Size\": 4, \"Visibility\": \"public\"}"
+    },
+    "meta/h1.json": {
+      "symlink_to": "U1_pkg.zip.json"
+    }
+  },
+  "steps": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/Marti/sync/content",
+        "identity": {
+          "cn": "alice"
+        },
+        "query": {
+          "hash": "h1",
+          "receiver": "ANDROID-2"
+        }
+      },
+      "record_headers": [
+        "Content-Disposition",
+        "Content-Type",
+        "Content-Length"
+      ],
+      "expect": {
+        "status": 200,
+        "content_type": "application/zip",
+        "body": "DATA",
+        "headers": {
+          "Content-Disposition": "attachment; filename=pkg.zip",
+          "Content-Type": "application/zip",
+          "Content-Length": "4"
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/Marti/sync/content",
+        "identity": {
+          "cn": "alice"
+        },
+        "query": {
+          "hash": "nope"
+        }
+      },
+      "rust_expect": {
+        "status": 404,
+        "content_type": "text/html; charset=utf-8",
+        "body": "File not found"
+      },
+      "expect": {
+        "status": 500,
+        "content_type": "text/html; charset=utf-8",
+        "body_is_framework_page": true
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/Marti/sync/content",
+        "identity": {
+          "cn": "alice"
+        }
+      },
+      "expect": {
+        "status": 400,
+        "content_type": "text/html; charset=utf-8",
+        "body": "Must supply hash"
+      }
+    }
+  ],
+  "expected-divergence": [
+    "D-15"
+  ],
+  "final_expect": {
+    "files": {
+      "U1_pkg.zip": {
+        "content": "DATA"
+      },
+      "meta/U1_pkg.zip.json": {
+        "content": "{\"UID\": \"U1_pkg.zip\", \"Name\": \"pkg.zip\", \"Hash\": \"h1\", \"PrimaryKey\": 1, \"SubmissionDateTime\": \"$TIMESTAMP\", \"SubmissionUser\": \"alice\", \"CreatorUid\": \"U1\", \"Keywords\": \"kw\", \"MIMEType\": \"application/zip\", \"Size\": 4, \"Visibility\": \"public\"}"
+      },
+      "meta/h1.json": {
+        "symlink_to": "U1_pkg.zip.json"
+      }
+    }
+  },
+  "format": 2,
+  "requires": [
+    "tls"
+  ],
+  "verified_against": {
+    "oracle": "python taky 0.9 (tools/run_python_dps.py)",
+    "versions": [
+      "python 3.13.17",
+      "Flask 2.3.3",
+      "Werkzeug 3.1.9",
+      "lxml 6.1.3",
+      "cryptography 50.0.2",
+      "libxml2 2.14.6"
+    ]
+  }
+}

@@ -1,0 +1,81 @@
+{
+  "id": "D015",
+  "title": "Unknown path 404; wrong method 405",
+  "runner": "dps",
+  "source_refs": [
+    "taky/taky/dps/views/datapackage.py:56"
+  ],
+  "notes": "",
+  "config": {
+    "taky": {
+      "hostname": "taky.example",
+      "node_id": "NODE-1"
+    },
+    "ssl": {
+      "enabled": "true"
+    }
+  },
+  "initial_files": {},
+  "steps": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/Marti/nothing",
+        "identity": {
+          "cn": "alice"
+        }
+      },
+      "expect": {
+        "status": 404,
+        "content_type": "text/html; charset=utf-8",
+        "body_is_framework_page": true
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "path": "/Marti/sync/search",
+        "identity": {
+          "cn": "alice"
+        }
+      },
+      "expect": {
+        "status": 405,
+        "content_type": "text/html; charset=utf-8",
+        "body_is_framework_page": true
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/Marti/sync/missionupload",
+        "identity": {
+          "cn": "alice"
+        }
+      },
+      "expect": {
+        "status": 405,
+        "content_type": "text/html; charset=utf-8",
+        "body_is_framework_page": true
+      }
+    }
+  ],
+  "final_expect": {
+    "files": {}
+  },
+  "format": 2,
+  "requires": [
+    "tls"
+  ],
+  "verified_against": {
+    "oracle": "python taky 0.9 (tools/run_python_dps.py)",
+    "versions": [
+      "python 3.13.17",
+      "Flask 2.3.3",
+      "Werkzeug 3.1.9",
+      "lxml 6.1.3",
+      "cryptography 50.0.2",
+      "libxml2 2.14.6"
+    ]
+  }
+}

@@ -1,0 +1,146 @@
+{
+  "id": "D018",
+  "title": "DPS hash path traversal (D-22): unvalidated `hash` reads files outside upload_path in Python",
+  "runner": "dps",
+  "source_refs": [
+    "taky/taky/dps/views/datapackage.py:23",
+    "taky/taky/dps/views/datapackage.py:95",
+    "qa01/work/probes/dps_hash_traversal_probe.py"
+  ],
+  "notes": "D-22 (BUG, found by qa01): `hash` is substituted into meta/<hash>.json and the resolved meta['UID'] is passed to send_file without validation. Step 1: hash='../X_evil' opens meta/../X_evil.json == <upload_path>/X_evil.json, whose forged UID '../sekret.txt' makes Python serve a file OUTSIDE upload_path (here a harmless planted test file in the temp root). Step 2 leaks existence the same way via missionquery. Step 3 (control) shows a well-formed hash is unaffected. Rust validates the hash against ^[A-Za-z0-9._-]+$ (and rejects '..'); a traversing hash -> 400 'Invalid hash'. The same unvalidated `hash` on missionupload lets Python create a symlink and unlink *.json outside meta/ (see dps-cli-config.md DC BUG paragraph); Rust rejects those too.",
+  "config": {
+    "taky": {
+      "hostname": "taky.example",
+      "node_id": "NODE-1"
+    },
+    "ssl": {
+      "enabled": "true"
+    }
+  },
+  "initial_files": {
+    "U1_pkg.zip": {
+      "content": "DATA"
+    },
+    "meta/U1_pkg.zip.json": {
+      "content": "{\"UID\": \"U1_pkg.zip\", \"Name\": \"pkg.zip\", \"Hash\": \"h1\", \"PrimaryKey\": 1, \"SubmissionDateTime\": \"2030-01-01T00:00:00.000000Z\", \"SubmissionUser\": \"alice\", \"CreatorUid\": \"U1\", \"Keywords\": \"kw\", \"MIMEType\": \"application/zip\", \"Size\": 4, \"Visibility\": \"public\"}"
+    },
+    "meta/h1.json": {
+      "symlink_to": "U1_pkg.zip.json"
+    },
+    "X_evil.json": {
+      "content": "{\"UID\": \"../sekret.txt\", \"Name\": \"loot.txt\"}"
+    },
+    "../sekret.txt": {
+      "content": "OUTSIDE-UPLOAD-HARMLESS-TESTDATA"
+    }
+  },
+  "steps": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/Marti/sync/content",
+        "identity": {
+          "cn": "alice"
+        },
+        "query": {
+          "hash": "../X_evil"
+        }
+      },
+      "record_headers": [
+        "Content-Disposition"
+      ],
+      "rust_expect": {
+        "status": 400,
+        "content_type": "text/html; charset=utf-8",
+        "body": "Invalid hash"
+      },
+      "expect": {
+        "status": 200,
+        "content_type": "text/plain; charset=utf-8",
+        "body": "OUTSIDE-UPLOAD-HARMLESS-TESTDATA",
+        "headers": {
+          "Content-Disposition": "attachment; filename=loot.txt"
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/Marti/sync/missionquery",
+        "identity": {
+          "cn": "alice"
+        },
+        "query": {
+          "hash": "../X_evil"
+        }
+      },
+      "rust_expect": {
+        "status": 400,
+        "content_type": "text/html; charset=utf-8",
+        "body": "Invalid hash"
+      },
+      "expect": {
+        "status": 200,
+        "content_type": "text/html; charset=utf-8",
+        "body": "https://taky.example:8443//Marti/sync/content?hash=../X_evil"
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/Marti/sync/content",
+        "identity": {
+          "cn": "alice"
+        },
+        "query": {
+          "hash": "h1"
+        }
+      },
+      "record_headers": [
+        "Content-Disposition"
+      ],
+      "expect": {
+        "status": 200,
+        "content_type": "application/zip",
+        "body": "DATA",
+        "headers": {
+          "Content-Disposition": "attachment; filename=pkg.zip"
+        }
+      }
+    }
+  ],
+  "expected-divergence": [
+    "D-22"
+  ],
+  "final_expect": {
+    "files": {
+      "U1_pkg.zip": {
+        "content": "DATA"
+      },
+      "X_evil.json": {
+        "content": "{\"UID\": \"../sekret.txt\", \"Name\": \"loot.txt\"}"
+      },
+      "meta/U1_pkg.zip.json": {
+        "content": "{\"UID\": \"U1_pkg.zip\", \"Name\": \"pkg.zip\", \"Hash\": \"h1\", \"PrimaryKey\": 1, \"SubmissionDateTime\": \"$TIMESTAMP\", \"SubmissionUser\": \"alice\", \"CreatorUid\": \"U1\", \"Keywords\": \"kw\", \"MIMEType\": \"application/zip\", \"Size\": 4, \"Visibility\": \"public\"}"
+      },
+      "meta/h1.json": {
+        "symlink_to": "U1_pkg.zip.json"
+      }
+    }
+  },
+  "format": 2,
+  "requires": [
+    "tls"
+  ],
+  "verified_against": {
+    "oracle": "python taky 0.9 (tools/run_python_dps.py)",
+    "versions": [
+      "python 3.13.17",
+      "Flask 2.3.3",
+      "Werkzeug 3.1.9",
+      "lxml 6.1.3",
+      "cryptography 50.0.2",
+      "libxml2 2.14.6"
+    ]
+  }
+}

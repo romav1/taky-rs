@@ -51,9 +51,39 @@ pub const DEFAULT_CFG: &[DefaultSection] = &[
     ),
 ];
 
-/// `ConfigParser(allow_no_value=True)` after `read_dict(DEFAULT_CFG)` — for `takyctl-rs setup`.
-///
-/// **T-10 scaffold:** implementation — T-20.
+/// `ConfigParser(allow_no_value=True)` after `read_dict(DEFAULT_CFG)` — for `takyctl-rs setup`
+/// and as the base that `load_config` overlays the file on.
 pub fn default_ini() -> Ini {
-    todo!("T-20: build Ini from DEFAULT_CFG")
+    let mut ini = Ini::new();
+    for (section, keys) in DEFAULT_CFG {
+        // DEFAULT_CFG has unique, non-DEFAULT section names: add_section cannot fail.
+        let _ = ini.add_section(section);
+        for (k, v) in *keys {
+            let _ = ini.set_raw(section, k, *v);
+        }
+    }
+    ini
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_ini_matches_default_cfg() {
+        let ini = default_ini();
+        assert_eq!(
+            ini.sections().collect::<Vec<_>>(),
+            vec!["taky", "cot_server", "dp_server", "ssl"]
+        );
+        assert_eq!(
+            ini.get("taky", "hostname").unwrap().as_deref(),
+            Some("taky.local")
+        );
+        assert_eq!(ini.get("taky", "redis").unwrap(), None);
+        assert!(
+            ini.write()
+                .starts_with("[taky]\nhostname = taky.local\nnode_id = TAKY\nbind_ip\n")
+        );
+    }
 }

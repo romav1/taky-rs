@@ -1,0 +1,81 @@
+{
+  "id": "V011",
+  "title": "Rewriting: extra attributes/children dropped, point reformatted, tz offset discarded, ms truncation",
+  "runner": "cot",
+  "tags": [
+    "model",
+    "quirk"
+  ],
+  "source_refs": [
+    "taky/taky/cot/models/event.py:95",
+    "taky/taky/cot/models/point.py:46",
+    "taky/taky/cot/models/event.py:52"
+  ],
+  "notes": "",
+  "now": "2030-01-01T00:00:00Z",
+  "config": {},
+  "clients": {
+    "A": {
+      "kind": "cot"
+    },
+    "B": {
+      "kind": "cot"
+    }
+  },
+  "steps": [
+    {
+      "op": "connect",
+      "client": "A",
+      "expect": {
+        "deliveries": {}
+      }
+    },
+    {
+      "op": "connect",
+      "client": "B",
+      "expect": {
+        "deliveries": {}
+      }
+    },
+    {
+      "op": "send",
+      "client": "A",
+      "chunks": [
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><event version=\"2.0\" uid=\"RW-1\" type=\"a-u-G\" how=\"h-e\" access=\"Undefined\" qos=\"1-r-c\" opex=\"e-x\" time=\"2030-01-01T03:00:00+03:00\" start=\"2030-01-01T00:00:00.123456Z\" stale=\"2030-01-01T00:10:00Z\"><point lat=\"1.23456789\" lon=\"2\" hae=\"3.06\" ce=\"4\" le=\"5\"/><foo bar=\"1\"/><detail><contact callsign=\"X\"/><remarks>a &amp; b &lt;c&gt;</remarks></detail><trailer/></event>"
+      ],
+      "expect": {
+        "deliveries": {
+          "B": [
+            "<event version=\"2.0\" uid=\"RW-1\" type=\"a-u-G\" how=\"h-e\" time=\"2030-01-01T03:00:00.000Z\" start=\"2030-01-01T00:00:00.123Z\" stale=\"2030-01-01T00:10:00.000Z\"><point lat=\"1.234568\" lon=\"2.000000\" hae=\"3.1\" ce=\"4.0\" le=\"5.0\"/><detail><contact callsign=\"X\"/><remarks>a &amp; b &lt;c&gt;</remarks></detail></event>"
+          ]
+        }
+      }
+    }
+  ],
+  "final_expect": {
+    "persist": {
+      "backend": "memory",
+      "uids": [
+        "RW-1"
+      ]
+    }
+  },
+  "format": 2,
+  "requires": [
+    "clock",
+    "persist-hook"
+  ],
+  "verified_against": {
+    "oracle": "python taky 0.9 (tools/run_python.py)",
+    "versions": [
+      "python 3.13.17",
+      "lxml 6.1.3",
+      "libxml2 2.14.6",
+      "python-dateutil 3.0.0",
+      "cryptography 50.0.2",
+      "fakeredis 2.40.0",
+      "Flask 2.3.3",
+      "Werkzeug 3.1.9"
+    ]
+  }
+}

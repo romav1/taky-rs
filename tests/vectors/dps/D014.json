@@ -1,0 +1,72 @@
+{
+  "id": "D014",
+  "title": "KML stubs: TracksKML POST -> empty 200; ExportMissionKML GET -> fixed empty kml document",
+  "runner": "dps",
+  "source_refs": [
+    "taky/taky/dps/views/kml.py:6",
+    "taky/taky/dps/views/kml.py:14"
+  ],
+  "notes": "",
+  "config": {
+    "taky": {
+      "hostname": "taky.example",
+      "node_id": "NODE-1"
+    },
+    "ssl": {
+      "enabled": "true"
+    }
+  },
+  "initial_files": {},
+  "steps": [
+    {
+      "request": {
+        "method": "POST",
+        "path": "/Marti/TracksKML",
+        "identity": {
+          "cn": "alice"
+        },
+        "body": "x"
+      },
+      "expect": {
+        "status": 200,
+        "content_type": "text/html; charset=utf-8",
+        "body": ""
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/Marti/ExportMissionKML",
+        "identity": {
+          "cn": "alice"
+        },
+        "query": {
+          "format": "kmz"
+        }
+      },
+      "expect": {
+        "status": 200,
+        "content_type": "text/html; charset=utf-8",
+        "body": "<?xml version='1.0' encoding='UTF-8' standalone='yes' ?><kml xmlns=\"http://www.opengis.net/kml/2.2\" xmlns:gx=\"http://www.google.com/kml/ext/2.2\"></kml>"
+      }
+    }
+  ],
+  "final_expect": {
+    "files": {}
+  },
+  "format": 2,
+  "requires": [
+    "tls"
+  ],
+  "verified_against": {
+    "oracle": "python taky 0.9 (tools/run_python_dps.py)",
+    "versions": [
+      "python 3.13.17",
+      "Flask 2.3.3",
+      "Werkzeug 3.1.9",
+      "lxml 6.1.3",
+      "cryptography 50.0.2",
+      "libxml2 2.14.6"
+    ]
+  }
+}

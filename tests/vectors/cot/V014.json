@@ -1,0 +1,72 @@
+{
+  "id": "V014",
+  "title": "SA with <track> lacking speed is dropped entirely",
+  "runner": "cot",
+  "tags": [
+    "errors",
+    "quirk"
+  ],
+  "source_refs": [
+    "taky/taky/cot/models/takuser.py:90"
+  ],
+  "notes": "",
+  "now": "2030-01-01T00:00:00Z",
+  "config": {},
+  "clients": {
+    "A": {
+      "kind": "cot"
+    },
+    "B": {
+      "kind": "cot"
+    }
+  },
+  "steps": [
+    {
+      "op": "connect",
+      "client": "A",
+      "expect": {
+        "deliveries": {}
+      }
+    },
+    {
+      "op": "connect",
+      "client": "B",
+      "expect": {
+        "deliveries": {}
+      }
+    },
+    {
+      "op": "send",
+      "client": "A",
+      "chunks": [
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><event version=\"2.0\" uid=\"ANDROID-A\" type=\"a-f-G-U-C\" time=\"2030-01-01T00:00:00.000Z\" start=\"2030-01-01T00:00:00.000Z\" stale=\"2030-01-01T00:10:00.000Z\" how=\"m-g\"><point lat=\"1.234567\" lon=\"-3.141592\" hae=\"-25.7\" ce=\"9.9\" le=\"9999999.0\"/><detail><takv os=\"29\" version=\"4.10.0\" device=\"PIXEL 7\" platform=\"ATAK-CIV\"/><contact endpoint=\"*:-1:stcp\" callsign=\"ALPHA\"/><uid Droid=\"ALPHA\"/><__group role=\"Team Member\" name=\"Cyan\"/><status battery=\"78\"/><track course=\"80.2\"/></detail></event>"
+      ],
+      "expect": {
+        "deliveries": {}
+      }
+    }
+  ],
+  "final_expect": {
+    "persist": {
+      "backend": "memory",
+      "uids": []
+    }
+  },
+  "format": 2,
+  "requires": [
+    "persist-hook"
+  ],
+  "verified_against": {
+    "oracle": "python taky 0.9 (tools/run_python.py)",
+    "versions": [
+      "python 3.13.17",
+      "lxml 6.1.3",
+      "libxml2 2.14.6",
+      "python-dateutil 3.0.0",
+      "cryptography 50.0.2",
+      "fakeredis 2.40.0",
+      "Flask 2.3.3",
+      "Werkzeug 3.1.9"
+    ]
+  }
+}

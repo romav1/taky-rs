@@ -1,0 +1,139 @@
+{
+  "id": "V046",
+  "title": "While a mgmt client is connected, every received CoT is dropped (mon_packet AttributeError)",
+  "runner": "cot",
+  "tags": [
+    "mgmt",
+    "bug"
+  ],
+  "source_refs": [
+    "taky/taky/cot/server.py:373",
+    "taky/taky/cot/mgmt.py:8"
+  ],
+  "notes": "D-9: in Rust an open mgmt connection does not affect CoT traffic: MG-1 is routed and persisted, the ping is answered.",
+  "now": "2030-01-01T00:00:00Z",
+  "config": {},
+  "clients": {
+    "A": {
+      "kind": "cot"
+    },
+    "B": {
+      "kind": "cot"
+    }
+  },
+  "steps": [
+    {
+      "op": "connect",
+      "client": "A",
+      "expect": {
+        "deliveries": {}
+      }
+    },
+    {
+      "op": "connect",
+      "client": "B",
+      "expect": {
+        "deliveries": {}
+      }
+    },
+    {
+      "op": "mgmt_hold",
+      "expect": {
+        "deliveries": {}
+      }
+    },
+    {
+      "op": "send",
+      "client": "A",
+      "chunks": [
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><event version=\"2.0\" uid=\"MG-1\" type=\"a-u-G\" time=\"2030-01-01T00:00:00.000Z\" start=\"2030-01-01T00:00:00.000Z\" stale=\"2030-01-01T00:10:00.000Z\" how=\"h-g-i-g-o\"><point lat=\"54.338986\" lon=\"9.755263\" hae=\"0.0\" ce=\"9999999.0\" le=\"9999999.0\"/><detail><contact callsign=\"Marker 1\"/></detail></event>"
+      ],
+      "rust_expect": {
+        "deliveries": {
+          "B": [
+            "<event version=\"2.0\" uid=\"MG-1\" type=\"a-u-G\" how=\"h-g-i-g-o\" time=\"2030-01-01T00:00:00.000Z\" start=\"2030-01-01T00:00:00.000Z\" stale=\"2030-01-01T00:10:00.000Z\"><point lat=\"54.338986\" lon=\"9.755263\" hae=\"0.0\" ce=\"9999999.0\" le=\"9999999.0\"/><detail><contact callsign=\"Marker 1\"/></detail></event>"
+          ]
+        }
+      },
+      "expect": {
+        "deliveries": {}
+      }
+    },
+    {
+      "op": "send",
+      "client": "A",
+      "chunks": [
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><event version=\"2.0\" uid=\"ANDROID-A-ping\" type=\"t-x-c-t\" time=\"2030-01-01T00:00:00.000Z\" start=\"2030-01-01T00:00:00.000Z\" stale=\"2030-01-01T00:00:10.000Z\" how=\"m-g\"><point lat=\"0.0\" lon=\"0.0\" hae=\"0.0\" ce=\"9999999.0\" le=\"9999999.0\"/><detail/></event>"
+      ],
+      "rust_expect": {
+        "deliveries": {
+          "A": [
+            "<event version=\"2.0\" uid=\"takPong\" type=\"t-x-c-t-r\" how=\"h-g-i-g-o\" time=\"2030-01-01T00:00:00.000Z\" start=\"2030-01-01T00:00:00.000Z\" stale=\"2030-01-01T00:00:20.000Z\"><point lat=\"0.000000\" lon=\"0.000000\" hae=\"0.0\" ce=\"9999999.0\" le=\"9999999.0\"/></event>"
+          ]
+        }
+      },
+      "expect": {
+        "deliveries": {}
+      }
+    },
+    {
+      "op": "mgmt_release",
+      "expect": {
+        "deliveries": {}
+      }
+    },
+    {
+      "op": "send",
+      "client": "A",
+      "chunks": [
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><event version=\"2.0\" uid=\"MG-2\" type=\"a-u-G\" time=\"2030-01-01T00:00:00.000Z\" start=\"2030-01-01T00:00:00.000Z\" stale=\"2030-01-01T00:10:00.000Z\" how=\"h-g-i-g-o\"><point lat=\"54.338986\" lon=\"9.755263\" hae=\"0.0\" ce=\"9999999.0\" le=\"9999999.0\"/><detail><contact callsign=\"Marker 1\"/></detail></event>"
+      ],
+      "expect": {
+        "deliveries": {
+          "B": [
+            "<event version=\"2.0\" uid=\"MG-2\" type=\"a-u-G\" how=\"h-g-i-g-o\" time=\"2030-01-01T00:00:00.000Z\" start=\"2030-01-01T00:00:00.000Z\" stale=\"2030-01-01T00:10:00.000Z\"><point lat=\"54.338986\" lon=\"9.755263\" hae=\"0.0\" ce=\"9999999.0\" le=\"9999999.0\"/><detail><contact callsign=\"Marker 1\"/></detail></event>"
+          ]
+        }
+      }
+    }
+  ],
+  "expected-divergence": [
+    "D-9"
+  ],
+  "final_rust_expect": {
+    "persist": {
+      "backend": "memory",
+      "uids": [
+        "MG-1",
+        "MG-2"
+      ]
+    }
+  },
+  "final_expect": {
+    "persist": {
+      "backend": "memory",
+      "uids": [
+        "MG-2"
+      ]
+    }
+  },
+  "format": 2,
+  "requires": [
+    "clock",
+    "mgmt",
+    "persist-hook"
+  ],
+  "verified_against": {
+    "oracle": "python taky 0.9 (tools/run_python.py)",
+    "versions": [
+      "python 3.13.17",
+      "lxml 6.1.3",
+      "libxml2 2.14.6",
+      "python-dateutil 3.0.0",
+      "cryptography 50.0.2",
+      "fakeredis 2.40.0",
+      "Flask 2.3.3",
+      "Werkzeug 3.1.9"
+    ]
+  }
+}

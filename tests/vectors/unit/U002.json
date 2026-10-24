@@ -1,0 +1,338 @@
+{
+  "id": "U002",
+  "title": "float() + %.6f/%.1f as used for <point> (point.py:36-54)",
+  "runner": "unit",
+  "kind": "float",
+  "source_refs": [
+    "taky/taky/cot/models/point.py:36"
+  ],
+  "notes": "f6 = lat/lon output, f1 = hae/ce/le output. Rust reproduces fully (arch01, OQ-06).",
+  "cases": [
+    {
+      "input": "1.5",
+      "expect": {
+        "ok": "1.5",
+        "f6": "1.500000",
+        "f1": "1.5"
+      }
+    },
+    {
+      "input": "-0",
+      "expect": {
+        "ok": "-0.0",
+        "f6": "-0.000000",
+        "f1": "-0.0"
+      }
+    },
+    {
+      "input": "0",
+      "expect": {
+        "ok": "0.0",
+        "f6": "0.000000",
+        "f1": "0.0"
+      }
+    },
+    {
+      "input": "1e3",
+      "expect": {
+        "ok": "1000.0",
+        "f6": "1000.000000",
+        "f1": "1000.0"
+      }
+    },
+    {
+      "input": "1E-3",
+      "expect": {
+        "ok": "0.001",
+        "f6": "0.001000",
+        "f1": "0.0"
+      }
+    },
+    {
+      "input": "nan",
+      "expect": {
+        "ok": "nan",
+        "f6": "nan",
+        "f1": "nan"
+      }
+    },
+    {
+      "input": "NaN",
+      "expect": {
+        "ok": "nan",
+        "f6": "nan",
+        "f1": "nan"
+      }
+    },
+    {
+      "input": "-nan",
+      "expect": {
+        "ok": "nan",
+        "f6": "nan",
+        "f1": "nan"
+      }
+    },
+    {
+      "input": "+nan",
+      "expect": {
+        "ok": "nan",
+        "f6": "nan",
+        "f1": "nan"
+      }
+    },
+    {
+      "input": "inf",
+      "expect": {
+        "ok": "inf",
+        "f6": "inf",
+        "f1": "inf"
+      }
+    },
+    {
+      "input": "-Infinity",
+      "expect": {
+        "ok": "-inf",
+        "f6": "-inf",
+        "f1": "-inf"
+      }
+    },
+    {
+      "input": "INFINITY",
+      "expect": {
+        "ok": "inf",
+        "f6": "inf",
+        "f1": "inf"
+      }
+    },
+    {
+      "input": "infinite",
+      "expect": {
+        "error": "UnmarshalError",
+        "python_exception": "ValueError"
+      }
+    },
+    {
+      "input": " 2.5 ",
+      "expect": {
+        "ok": "2.5",
+        "f6": "2.500000",
+        "f1": "2.5"
+      }
+    },
+    {
+      "input": "\t2.5\n",
+      "expect": {
+        "ok": "2.5",
+        "f6": "2.500000",
+        "f1": "2.5"
+      }
+    },
+    {
+      "input": "1_000.5",
+      "expect": {
+        "ok": "1000.5",
+        "f6": "1000.500000",
+        "f1": "1000.5"
+      }
+    },
+    {
+      "input": "1__0",
+      "expect": {
+        "error": "UnmarshalError",
+        "python_exception": "ValueError"
+      }
+    },
+    {
+      "input": "_1",
+      "expect": {
+        "error": "UnmarshalError",
+        "python_exception": "ValueError"
+      }
+    },
+    {
+      "input": "0x10",
+      "expect": {
+        "error": "UnmarshalError",
+        "python_exception": "ValueError"
+      }
+    },
+    {
+      "input": "",
+      "expect": {
+        "error": "UnmarshalError",
+        "python_exception": "ValueError"
+      }
+    },
+    {
+      "input": " ",
+      "expect": {
+        "error": "UnmarshalError",
+        "python_exception": "ValueError"
+      }
+    },
+    {
+      "input": "1,5",
+      "expect": {
+        "error": "UnmarshalError",
+        "python_exception": "ValueError"
+      }
+    },
+    {
+      "input": "+3",
+      "expect": {
+        "ok": "3.0",
+        "f6": "3.000000",
+        "f1": "3.0"
+      }
+    },
+    {
+      "input": ".5",
+      "expect": {
+        "ok": "0.5",
+        "f6": "0.500000",
+        "f1": "0.5"
+      }
+    },
+    {
+      "input": "5.",
+      "expect": {
+        "ok": "5.0",
+        "f6": "5.000000",
+        "f1": "5.0"
+      }
+    },
+    {
+      "input": "1.23456789",
+      "expect": {
+        "ok": "1.23456789",
+        "f6": "1.234568",
+        "f1": "1.2"
+      }
+    },
+    {
+      "input": "1.0000005",
+      "expect": {
+        "ok": "1.0000005",
+        "f6": "1.000001",
+        "f1": "1.0"
+      }
+    },
+    {
+      "input": "0.0000005",
+      "expect": {
+        "ok": "5e-07",
+        "f6": "0.000000",
+        "f1": "0.0"
+      }
+    },
+    {
+      "input": "0.00000049",
+      "expect": {
+        "ok": "4.9e-07",
+        "f6": "0.000000",
+        "f1": "0.0"
+      }
+    },
+    {
+      "input": "1.25",
+      "expect": {
+        "ok": "1.25",
+        "f6": "1.250000",
+        "f1": "1.2"
+      }
+    },
+    {
+      "input": "0.05",
+      "expect": {
+        "ok": "0.05",
+        "f6": "0.050000",
+        "f1": "0.1"
+      }
+    },
+    {
+      "input": "-0.05",
+      "expect": {
+        "ok": "-0.05",
+        "f6": "-0.050000",
+        "f1": "-0.1"
+      }
+    },
+    {
+      "input": "2.675",
+      "expect": {
+        "ok": "2.675",
+        "f6": "2.675000",
+        "f1": "2.7"
+      }
+    },
+    {
+      "input": "1e400",
+      "expect": {
+        "ok": "inf",
+        "f6": "inf",
+        "f1": "inf"
+      }
+    },
+    {
+      "input": "-1e400",
+      "expect": {
+        "ok": "-inf",
+        "f6": "-inf",
+        "f1": "-inf"
+      }
+    },
+    {
+      "input": "1e-400",
+      "expect": {
+        "ok": "0.0",
+        "f6": "0.000000",
+        "f1": "0.0"
+      }
+    },
+    {
+      "input": "٣",
+      "expect": {
+        "ok": "3.0",
+        "f6": "3.000000",
+        "f1": "3.0"
+      }
+    },
+    {
+      "input": "１.5",
+      "expect": {
+        "ok": "1.5",
+        "f6": "1.500000",
+        "f1": "1.5"
+      }
+    },
+    {
+      "input": "1.5f",
+      "expect": {
+        "error": "UnmarshalError",
+        "python_exception": "ValueError"
+      }
+    },
+    {
+      "input": "1.5e",
+      "expect": {
+        "error": "UnmarshalError",
+        "python_exception": "ValueError"
+      }
+    },
+    {
+      "input": null,
+      "expect": {
+        "error": "UnmarshalError",
+        "python_exception": "TypeError"
+      }
+    }
+  ],
+  "format": 2,
+  "verified_against": {
+    "oracle": "python taky 0.9 (tools/run_python_unit.py)",
+    "versions": [
+      "python 3.13.17",
+      "python-dateutil 3.0.0"
+    ]
+  }
+}

@@ -1,0 +1,70 @@
+{
+  "id": "D009",
+  "title": "Download: meta exists but file missing -> 404 'Can't find <abs path>'",
+  "runner": "dps",
+  "source_refs": [
+    "taky/taky/dps/views/datapackage.py:97"
+  ],
+  "notes": "Body contains the absolute server path (information leak); the runner's temp path appears in the body. Compare status only.",
+  "config": {
+    "taky": {
+      "hostname": "taky.example",
+      "node_id": "NODE-1"
+    },
+    "ssl": {
+      "enabled": "true"
+    }
+  },
+  "initial_files": {
+    "meta/U1_pkg.zip.json": {
+      "content": "{\"UID\": \"U1_pkg.zip\", \"Name\": \"pkg.zip\", \"Hash\": \"h1\", \"PrimaryKey\": 1, \"SubmissionDateTime\": \"2030-01-01T00:00:00.000000Z\", \"SubmissionUser\": \"alice\", \"CreatorUid\": \"U1\", \"Keywords\": \"kw\", \"MIMEType\": \"application/zip\", \"Size\": 4, \"Visibility\": \"public\"}"
+    },
+    "meta/h1.json": {
+      "symlink_to": "U1_pkg.zip.json"
+    }
+  },
+  "steps": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/Marti/sync/content",
+        "identity": {
+          "cn": "alice"
+        },
+        "query": {
+          "hash": "h1"
+        }
+      },
+      "expect": {
+        "status": 404,
+        "content_type": "text/html; charset=utf-8",
+        "body": "Can't find $UPLOAD_PATH/U1_pkg.zip"
+      }
+    }
+  ],
+  "final_expect": {
+    "files": {
+      "meta/U1_pkg.zip.json": {
+        "content": "{\"UID\": \"U1_pkg.zip\", \"Name\": \"pkg.zip\", \"Hash\": \"h1\", \"PrimaryKey\": 1, \"SubmissionDateTime\": \"$TIMESTAMP\", \"SubmissionUser\": \"alice\", \"CreatorUid\": \"U1\", \"Keywords\": \"kw\", \"MIMEType\": \"application/zip\", \"Size\": 4, \"Visibility\": \"public\"}"
+      },
+      "meta/h1.json": {
+        "symlink_to": "U1_pkg.zip.json"
+      }
+    }
+  },
+  "format": 2,
+  "requires": [
+    "tls"
+  ],
+  "verified_against": {
+    "oracle": "python taky 0.9 (tools/run_python_dps.py)",
+    "versions": [
+      "python 3.13.17",
+      "Flask 2.3.3",
+      "Werkzeug 3.1.9",
+      "lxml 6.1.3",
+      "cryptography 50.0.2",
+      "libxml2 2.14.6"
+    ]
+  }
+}

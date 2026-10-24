@@ -1,0 +1,80 @@
+{
+  "id": "D005",
+  "title": "Upload missing hash/creatorUid/assetfile -> 400 'Invalid arguments'",
+  "runner": "dps",
+  "source_refs": [
+    "taky/taky/dps/views/datapackage.py:118"
+  ],
+  "notes": "",
+  "config": {
+    "taky": {
+      "hostname": "taky.example",
+      "node_id": "NODE-1"
+    },
+    "ssl": {
+      "enabled": "true"
+    }
+  },
+  "initial_files": {},
+  "steps": [
+    {
+      "request": {
+        "method": "POST",
+        "path": "/Marti/sync/missionupload",
+        "identity": {
+          "cn": "alice"
+        },
+        "query": {
+          "hash": "x"
+        }
+      },
+      "expect": {
+        "status": 400,
+        "content_type": "text/html; charset=utf-8",
+        "body": "Invalid arguments"
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "path": "/Marti/sync/missionupload",
+        "identity": {
+          "cn": "alice"
+        },
+        "query": {
+          "creatorUid": "U"
+        },
+        "multipart": [
+          {
+            "name": "assetfile",
+            "filename": "a.zip",
+            "data": "x"
+          }
+        ]
+      },
+      "expect": {
+        "status": 400,
+        "content_type": "text/html; charset=utf-8",
+        "body": "Invalid arguments"
+      }
+    }
+  ],
+  "final_expect": {
+    "files": {}
+  },
+  "format": 2,
+  "requires": [
+    "tls"
+  ],
+  "verified_against": {
+    "oracle": "python taky 0.9 (tools/run_python_dps.py)",
+    "versions": [
+      "python 3.13.17",
+      "Flask 2.3.3",
+      "Werkzeug 3.1.9",
+      "lxml 6.1.3",
+      "cryptography 50.0.2",
+      "libxml2 2.14.6"
+    ]
+  }
+}

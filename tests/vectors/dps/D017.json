@@ -1,0 +1,83 @@
+{
+  "id": "D017",
+  "title": "TLS mode: a client cannot spoof X-USER/x-user/X_USER; identity comes only from the client certificate",
+  "runner": "dps",
+  "source_refs": [
+    "taky/taky/dps/__main__.py:56",
+    "taky/taky/dps/__init__.py:12"
+  ],
+  "notes": "The gunicorn ClientCertificateWorker drops the six identity headers (case-insensitive) and underscore variants, then sets X-USER from the verified certificate CN. Step 1: spoofed headers, no certificate -> 401. Step 2: spoofed headers plus a valid 'bob' certificate -> authenticated as bob (200), spoof ignored. Rust behaves identically (same as D-21 in TLS mode: external X-USER is always ignored); no divergence.",
+  "config": {
+    "taky": {
+      "hostname": "taky.example",
+      "node_id": "NODE-1"
+    },
+    "ssl": {
+      "enabled": "true"
+    }
+  },
+  "initial_files": {},
+  "steps": [
+    {
+      "request": {
+        "method": "GET",
+        "path": "/Marti/api/clientEndPoints",
+        "identity": null,
+        "headers": {
+          "X-USER": "mallory",
+          "x-user": "mallory",
+          "X_USER": "mallory"
+        }
+      },
+      "expect": {
+        "status": 401,
+        "content_type": "text/html; charset=utf-8",
+        "body_is_framework_page": true
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/Marti/api/clientEndPoints",
+        "identity": {
+          "cn": "bob"
+        },
+        "headers": {
+          "X-USER": "mallory",
+          "x-user": "mallory",
+          "X_USER": "mallory"
+        }
+      },
+      "expect": {
+        "status": 200,
+        "content_type": "application/json",
+        "body_json": {
+          "BaseUrl": "",
+          "Matcher": "com.bbn.marti.remote.ClientEndpoint",
+          "NotificationId": "",
+          "ServerConnectString": "ssl:taky.example:8089",
+          "data": [],
+          "type": "com.bbn.marti.remote.ClientEndpoint"
+        }
+      }
+    }
+  ],
+  "final_expect": {
+    "files": {}
+  },
+  "format": 2,
+  "requires": [
+    "tls"
+  ],
+  "verified_against": {
+    "oracle": "python taky 0.9 (tools/run_python_dps.py)",
+    "versions": [
+      "python 3.13.17",
+      "Flask 2.3.3",
+      "Werkzeug 3.1.9",
+      "lxml 6.1.3",
+      "cryptography 50.0.2",
+      "libxml2 2.14.6"
+    ]
+  }
+}

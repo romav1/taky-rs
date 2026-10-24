@@ -1,0 +1,167 @@
+{
+  "id": "D011",
+  "title": "metadata tool PUT: body exactly 'public' -> public, anything else -> private; unknown hash 404",
+  "runner": "dps",
+  "source_refs": [
+    "taky/taky/dps/views/datapackage.py:164"
+  ],
+  "notes": "",
+  "config": {
+    "taky": {
+      "hostname": "taky.example",
+      "node_id": "NODE-1"
+    },
+    "ssl": {
+      "enabled": "true"
+    }
+  },
+  "initial_files": {
+    "U1_pkg.zip": {
+      "content": "DATA"
+    },
+    "meta/U1_pkg.zip.json": {
+      "content": "{\"UID\": \"U1_pkg.zip\", \"Name\": \"pkg.zip\", \"Hash\": \"h1\", \"PrimaryKey\": 1, \"SubmissionDateTime\": \"2030-01-01T00:00:00.000000Z\", \"SubmissionUser\": \"alice\", \"CreatorUid\": \"U1\", \"Keywords\": \"kw\", \"MIMEType\": \"application/zip\", \"Size\": 4, \"Visibility\": \"public\"}"
+    },
+    "meta/h1.json": {
+      "symlink_to": "U1_pkg.zip.json"
+    }
+  },
+  "steps": [
+    {
+      "request": {
+        "method": "PUT",
+        "path": "/Marti/api/sync/metadata/h1/tool",
+        "identity": {
+          "cn": "alice"
+        },
+        "body": "private"
+      },
+      "expect": {
+        "status": 200,
+        "content_type": "text/html; charset=utf-8",
+        "body": "https://taky.example:8443//Marti/sync/content?hash=h1"
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/Marti/sync/search",
+        "identity": {
+          "cn": "alice"
+        }
+      },
+      "expect": {
+        "status": 200,
+        "content_type": "application/json",
+        "body_json": {
+          "resultCount": 0,
+          "results": []
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "PUT",
+        "path": "/Marti/api/sync/metadata/h1/tool",
+        "identity": {
+          "cn": "alice"
+        },
+        "body": "Public"
+      },
+      "expect": {
+        "status": 200,
+        "content_type": "text/html; charset=utf-8",
+        "body": "https://taky.example:8443//Marti/sync/content?hash=h1"
+      }
+    },
+    {
+      "request": {
+        "method": "PUT",
+        "path": "/Marti/api/sync/metadata/h1/tool",
+        "identity": {
+          "cn": "alice"
+        },
+        "body": "public"
+      },
+      "expect": {
+        "status": 200,
+        "content_type": "text/html; charset=utf-8",
+        "body": "https://taky.example:8443//Marti/sync/content?hash=h1"
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/Marti/sync/search",
+        "identity": {
+          "cn": "alice"
+        }
+      },
+      "expect": {
+        "status": 200,
+        "content_type": "application/json",
+        "body_json": {
+          "resultCount": 1,
+          "results": [
+            {
+              "CreatorUid": "U1",
+              "Hash": "h1",
+              "Keywords": "kw",
+              "MIMEType": "application/zip",
+              "Name": "pkg.zip",
+              "PrimaryKey": 1,
+              "Size": 4,
+              "SubmissionDateTime": "$TIMESTAMP",
+              "SubmissionUser": "alice",
+              "UID": "U1_pkg.zip",
+              "Visibility": "public"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "request": {
+        "method": "PUT",
+        "path": "/Marti/api/sync/metadata/zz/tool",
+        "identity": {
+          "cn": "alice"
+        },
+        "body": "public"
+      },
+      "expect": {
+        "status": 404,
+        "content_type": "text/html; charset=utf-8",
+        "body": "Could not find file matching zz"
+      }
+    }
+  ],
+  "final_expect": {
+    "files": {
+      "U1_pkg.zip": {
+        "content": "DATA"
+      },
+      "meta/U1_pkg.zip.json": {
+        "content": "{\"UID\": \"U1_pkg.zip\", \"Name\": \"pkg.zip\", \"Hash\": \"h1\", \"PrimaryKey\": 1, \"SubmissionDateTime\": \"$TIMESTAMP\", \"SubmissionUser\": \"alice\", \"CreatorUid\": \"U1\", \"Keywords\": \"kw\", \"MIMEType\": \"application/zip\", \"Size\": 4, \"Visibility\": \"public\"}"
+      },
+      "meta/h1.json": {
+        "symlink_to": "U1_pkg.zip.json"
+      }
+    }
+  },
+  "format": 2,
+  "requires": [
+    "tls"
+  ],
+  "verified_against": {
+    "oracle": "python taky 0.9 (tools/run_python_dps.py)",
+    "versions": [
+      "python 3.13.17",
+      "Flask 2.3.3",
+      "Werkzeug 3.1.9",
+      "lxml 6.1.3",
+      "cryptography 50.0.2",
+      "libxml2 2.14.6"
+    ]
+  }
+}

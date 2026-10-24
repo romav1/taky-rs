@@ -1,0 +1,91 @@
+{
+  "id": "V043",
+  "title": "Redis: pre-seeded valid key replayed; corrupt key purged; foreign keyspace ignored",
+  "runner": "cot",
+  "tags": [
+    "redis"
+  ],
+  "source_refs": [
+    "taky/taky/cot/persistence.py:299",
+    "taky/taky/cot/persistence.py:289"
+  ],
+  "notes": "",
+  "now": "2030-01-01T00:00:00Z",
+  "config": {
+    "taky": {
+      "redis": "redis://localhost:6379/0",
+      "hostname": "h1"
+    }
+  },
+  "clients": {
+    "A": {
+      "kind": "cot"
+    },
+    "B": {
+      "kind": "cot"
+    }
+  },
+  "steps": [
+    {
+      "op": "connect",
+      "client": "A",
+      "expect": {
+        "deliveries": {
+          "A": [
+            "<event version=\"2.0\" uid=\"SEED-1\" type=\"a-u-G\" how=\"h-e\" time=\"2030-01-01T00:00:00.000Z\" start=\"2030-01-01T00:00:00.000Z\" stale=\"2030-01-01T00:10:00.000Z\"><point lat=\"1.000000\" lon=\"2.000000\" hae=\"3.0\" ce=\"4.0\" le=\"5.0\"/><detail><contact callsign=\"S\"/></detail></event>"
+          ]
+        }
+      }
+    }
+  ],
+  "initial_redis": {
+    "taky:h1:persist:SEED-1": {
+      "value": "<event version=\"2.0\" uid=\"SEED-1\" type=\"a-u-G\" how=\"h-e\" time=\"2030-01-01T00:00:00.000Z\" start=\"2030-01-01T00:00:00.000Z\" stale=\"2030-01-01T00:10:00.000Z\"><point lat=\"1.000000\" lon=\"2.000000\" hae=\"3.0\" ce=\"4.0\" le=\"5.0\"/><detail><contact callsign=\"S\"/></detail></event>",
+      "ttl": 600
+    },
+    "taky:h1:persist:BAD-1": {
+      "value": "<event><not closed",
+      "ttl": 600
+    },
+    "taky:other:persist:X": {
+      "value": "<event version=\"2.0\" uid=\"X\" type=\"a-u-G\" how=\"h-e\" time=\"2030-01-01T00:00:00.000Z\" start=\"2030-01-01T00:00:00.000Z\" stale=\"2030-01-01T00:10:00.000Z\"/>",
+      "ttl": 600
+    }
+  },
+  "final_expect_keys": [
+    "persist"
+  ],
+  "final_expect": {
+    "persist": {
+      "backend": "redis",
+      "keys": {
+        "taky:h1:persist:SEED-1": {
+          "value": "<event version=\"2.0\" uid=\"SEED-1\" type=\"a-u-G\" how=\"h-e\" time=\"2030-01-01T00:00:00.000Z\" start=\"2030-01-01T00:00:00.000Z\" stale=\"2030-01-01T00:10:00.000Z\"><point lat=\"1.000000\" lon=\"2.000000\" hae=\"3.0\" ce=\"4.0\" le=\"5.0\"/><detail><contact callsign=\"S\"/></detail></event>",
+          "ttl": 600
+        },
+        "taky:other:persist:X": {
+          "value": "<event version=\"2.0\" uid=\"X\" type=\"a-u-G\" how=\"h-e\" time=\"2030-01-01T00:00:00.000Z\" start=\"2030-01-01T00:00:00.000Z\" stale=\"2030-01-01T00:10:00.000Z\"/>",
+          "ttl": 600
+        }
+      }
+    }
+  },
+  "format": 2,
+  "requires": [
+    "clock",
+    "redis"
+  ],
+  "verified_against": {
+    "oracle": "python taky 0.9 (tools/run_python.py)",
+    "versions": [
+      "python 3.13.17",
+      "lxml 6.1.3",
+      "libxml2 2.14.6",
+      "python-dateutil 3.0.0",
+      "cryptography 50.0.2",
+      "fakeredis 2.40.0",
+      "Flask 2.3.3",
+      "Werkzeug 3.1.9"
+    ]
+  }
+}
