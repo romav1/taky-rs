@@ -1,17 +1,13 @@
 //! U003 (an01 vectors): the INI-level cases (configparser semantics on top of `DEFAULT_CFG`).
 //!
 //! The load_config-level cases of U003 (port/ttl/ssl normalization, path absolutization) are
-//! covered by S-302; they are recognized here and skipped.
+//! covered by `u003_load.rs` (S-302, all cases through `load_config`); they are skipped here.
 //!
-//! Vectors live outside the taky-rs repo (`<office>/shared/spec/vectors`). The directory is
-//! taken from `TAKY_VECTORS_DIR` or defaults to `../shared/spec/vectors` next to the workspace.
-//! If it is absent (taky-rs CI checkout), the test is skipped with a note unless
-//! `TAKY_VECTORS_REQUIRED` is set.
+//! Vectors are located by `taky_common::vectors` (`<workspace>/tests/vectors`, then
+//! `../shared/spec/vectors`); the test fails when neither exists.
 
 // Test code: helpers outside #[test] fns are not covered by clippy.toml allow-unwrap-in-tests.
 #![allow(clippy::unwrap_used)]
-
-use std::path::PathBuf;
 
 use serde_json::Value;
 use taky_config::defaults::DEFAULT_CFG;
@@ -39,13 +35,6 @@ fn normalized_key(key: &str) -> bool {
             .any(|(ds, keys)| *ds == s && keys.iter().any(|(dk, _)| *dk == k))
         || key == "taky.root_dir"
         || key == "dp_server.upload_path"
-}
-
-fn vectors_dir() -> PathBuf {
-    match std::env::var_os("TAKY_VECTORS_DIR") {
-        Some(d) => PathBuf::from(d),
-        None => PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../shared/spec/vectors"),
-    }
 }
 
 /// Outcome of a case: values of the requested keys or the Python error class.
@@ -89,16 +78,7 @@ fn expected(exp: &Value, keys: &[String]) -> Outcome {
 
 #[test]
 fn u003_ini_cases() {
-    let path = vectors_dir().join("unit/U003.json");
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        assert!(
-            std::env::var_os("TAKY_VECTORS_REQUIRED").is_none(),
-            "vector {} not found",
-            path.display()
-        );
-        eprintln!("SKIP: {} not found (set TAKY_VECTORS_DIR)", path.display());
-        return;
-    };
+    let text = taky_common::vectors::read_vector("unit/U003.json");
     let doc: Value = serde_json::from_str(&text).unwrap();
     assert_eq!(doc["id"], "U003");
     let cases = doc["cases"].as_array().unwrap();

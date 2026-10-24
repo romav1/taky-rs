@@ -2319,7 +2319,9 @@ version = "0.1.0"
 dependencies = [
  "serde_json",
  "taky-common",
+ "tempfile",
  "thiserror",
+ "tracing",
 ]
 
 [[package]]

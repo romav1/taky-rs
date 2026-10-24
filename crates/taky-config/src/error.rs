@@ -322,3 +322,18 @@ pub enum ConfigError {
     #[error("{0}")]
     Io(#[from] std::io::Error),
 }
+
+impl ConfigError {
+    /// Name of the Python exception class the original raises for this error (vector tests).
+    pub fn py_class(&self) -> &'static str {
+        match self {
+            ConfigError::Ini(e) => e.py_class(),
+            ConfigError::DefaultNotFound | ConfigError::Required => "FileNotFoundError",
+            ConfigError::InvalidPort(_) | ConfigError::InvalidMaxPersistTtl(_) => "ValueError",
+            ConfigError::Io(e) if e.kind() == std::io::ErrorKind::InvalidData => {
+                "UnicodeDecodeError"
+            }
+            ConfigError::Io(_) => "OSError",
+        }
+    }
+}
