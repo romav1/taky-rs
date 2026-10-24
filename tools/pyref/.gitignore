@@ -1,0 +1,6 @@
+# Generated bench state: venv, site, test-only CA/server/client keys, logs, pids. Never commit.
+/.state/
+*.pem
+*.key
+*.p12
+*.crt
