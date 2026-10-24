@@ -104,6 +104,23 @@
       }
     },
     {
+      "input": "[taky]\nbind_ip\nnode_id = %(bind_ip)s\n",
+      "keys": [
+        "taky.node_id"
+      ],
+      "rust_expect": {
+        "error": "InterpolationMissingOptionError",
+        "taky_exit": 1,
+        "taky_output": "config_error_message"
+      },
+      "note": "D-13: %(k)s -> valueless key (Python TypeError traceback)",
+      "expect": {
+        "error": "TypeError",
+        "taky_exit": 1,
+        "taky_output": "traceback"
+      }
+    },
+    {
       "input": "[taky]\n# 100% comment\nhostname = h\n",
       "keys": [
         "taky.hostname"

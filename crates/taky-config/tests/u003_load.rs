@@ -87,5 +87,5 @@ fn u003_all_cases_via_load_config() {
         "U003 failures:\n{}",
         failures.join("\n")
     );
-    assert_eq!(total, 41, "U003 case count changed");
+    assert_eq!(total, 42, "U003 case count changed");
 }

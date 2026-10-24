@@ -9,7 +9,7 @@
     "taky/taky/cot/mgmt.py:30",
     "taky/taky/cot/mgmt.py:81"
   ],
-  "notes": "",
+  "notes": "D-24: invalid JSON keeps the reply shape {\"error\": <text>}; the Rust text is the serde_json 1.0.154 error Display (a serde_json bump that changes it updates step 6 rust_expect).",
   "now": "2030-01-01T00:00:00Z",
   "config": {},
   "clients": {
@@ -83,6 +83,12 @@
     {
       "op": "mgmt",
       "request": "{not json",
+      "rust_expect": {
+        "deliveries": {},
+        "mgmt_response": {
+          "error": "key must be a string at line 1 column 2"
+        }
+      },
       "expect": {
         "deliveries": {},
         "mgmt_response": {
@@ -138,6 +144,9 @@
         }
       }
     }
+  ],
+  "expected-divergence": [
+    "D-24"
   ],
   "final_expect": {
     "persist": {

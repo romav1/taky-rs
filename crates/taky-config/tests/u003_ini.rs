@@ -119,7 +119,7 @@ fn u003_ini_cases() {
         failures.join("\n")
     );
     assert_eq!(
-        total, 23,
+        total, 24,
         "INI-level case count changed: re-check the selection"
     );
 }
