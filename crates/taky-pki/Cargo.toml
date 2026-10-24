@@ -19,9 +19,9 @@ rcgen = { workspace = true, optional = true }
 rsa = { workspace = true, optional = true }
 pkcs8.workspace = true
 der.workspace = true
-des = { workspace = true, optional = true }
-cbc = { workspace = true, optional = true }
-aes = { workspace = true, optional = true }
+des.workspace = true
+cbc.workspace = true
+aes.workspace = true
 sha1 = { workspace = true, optional = true }
 sha2.workspace = true
 hmac = { workspace = true, optional = true }
@@ -29,15 +29,24 @@ md-5.workspace = true
 rand = { workspace = true, optional = true }
 chrono.workspace = true
 thiserror.workspace = true
+nix.workspace = true
 
 [features]
 # Certificate / key / PKCS#12 generation (make_ca, make_cert, pkcs12 writer). Enabled only by
 # takyctl, so `rsa` (deny.toml RUSTSEC-2023-0071 exception) is not linked into taky-rs / taky_dps-rs
 # (review-T-10 N-2). Build binaries per package (`-p`) to avoid workspace feature unification.
-gen = ["dep:rcgen", "dep:rsa", "dep:des", "dep:cbc", "dep:aes", "dep:sha1", "dep:hmac", "dep:rand"]
+# des/cbc/aes are always linked: legacy encrypted PEM keys (ADR-003); pkcs8 PBES2 pulls them anyway.
+gen = ["dep:rcgen", "dep:rsa", "dep:sha1", "dep:hmac", "dep:rand"]
 
 [dev-dependencies]
 p12-keystore.workspace = true
+# Test certificates are generated at test time (no keys in the repo).
+rcgen.workspace = true
+rsa.workspace = true
+rand.workspace = true
+tempfile.workspace = true
+taky-common = { workspace = true, features = ["testkit"] }
+serde_json.workspace = true
 
 [lints]
 workspace = true
