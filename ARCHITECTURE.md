@@ -390,6 +390,11 @@ Persistence, CotLogger). **dev02** — `taky-pki`, `taky-server` (network, TLS, 
 workspace and signatures with `todo!()`), afterwards they change only by agreement via inbox + arch01 review.
 
 ```rust
+// ===== taky-common (dev01) =====
+// Injectable clock (qa01 test-strategy §4.6 A.1): every utcnow/time.time of the original goes through it.
+pub trait Clock: Send + Sync + 'static { fn utc_now(&self) -> NaiveDateTime; fn epoch(&self) -> f64; }
+pub type SharedClock = Arc<dyn Clock>;          // SystemClock in production, FakeClock (feature testkit) in tests
+
 // ===== taky-config (dev01) =====
 pub struct TakyConfig { pub taky: TakySect, pub cot_server: CotSect, pub dp_server: DpSect,
                         pub ssl: SslSect, pub cfg_path: Option<PathBuf>, /* raw: Ini */ }
@@ -414,8 +419,14 @@ pub fn serialize(e: &Element, o: &SerOpts) -> Vec<u8>;   // == lxml.etree.tostri
 // ===== taky-cot (dev01) =====
 pub struct CotDecoder { /* TreeBuilder + Limits */ }
 impl tokio_util::codec::Decoder for CotDecoder { type Item = Element; type Error = CotStreamError; /* … */ }
+pub struct Event { pub version: Option<String>, pub uid: Option<String>, pub etype: Option<String>,
+                   pub how: Option<String>, /* Option: B2/V013 fix — missing attrs must not crash replay */
+                   pub time: NaiveDateTime, pub start: NaiveDateTime, pub stale: NaiveDateTime,
+                   pub point: Point, pub detail: Option<EventDetail> }
 impl Event { pub fn from_element(e: &Element) -> Result<Event, UnmarshalError>;
-             pub fn to_frame(&self) -> Result<Frame, SerializeError>; /* bytes like etree.tostring */ }
+             pub fn to_frame(&self) -> Result<Frame, SerializeError>; /* bytes like etree.tostring */
+             pub fn persist_ttl(&self, clock: &dyn Clock) -> i64; }
+impl Persistence { pub async fn from_config(cfg: &TakyConfig, clock: SharedClock) -> Persistence; /* … */ }
 pub type Frame = Arc<[u8]>;
 
 pub struct ClientId(pub u64);
@@ -425,18 +436,18 @@ pub trait Outbox: Send + Sync + 'static {         // implemented by dev02 (bound
     fn try_send(&self, frame: Frame) -> Result<(), OutboxError>;
     fn close(&self, reason: &str);                // Router asks to disconnect (Full ⇒ "Slow client")
 }
-pub struct ClientStats { pub connected: f64, pub num_rx: AtomicU64, pub last_rx: AtomicF64Bits }
+pub struct ClientStats { pub connected: f64, pub num_rx: AtomicU64, pub last_rx: AtomicF64 /* f64 bits in AtomicU64 */ }
 pub struct ClientHandle { pub id: ClientId, pub kind: ClientKind, pub outbox: Arc<dyn Outbox>,
                           pub stats: Arc<ClientStats>, pub addr: Option<SocketAddr>,
                           pub peer_serial: Option<Vec<u8>> }
 pub struct Router { /* clients, monitors, persist, max_ttl, last_prune */ }
 impl Router {
-    pub fn new(max_persist_ttl: i64, persist: Persistence) -> Router;
+    pub fn new(max_persist_ttl: i64, persist: Persistence, clock: SharedClock) -> Router;
     pub fn client_connect(&mut self, h: ClientHandle);
     pub async fn send_persist(&mut self, id: ClientId);
     pub fn client_disconnect(&mut self, id: ClientId);
     pub async fn on_event(&mut self, src: ClientId, evt: Event);   // packet_rx+ping+ident+route
-    pub async fn maybe_prune(&mut self, now: Instant);              // once per 10 s
+    pub async fn maybe_prune(&mut self, now: tokio::time::Instant); // once per 10 s; pause/advance in tests
     pub fn clients(&self) -> impl Iterator<Item = (&ClientHandle, Option<&TakUser>)>; // for mgmt/kickban
 }
 pub struct CotLogger { /* log_cot dir, file */ }
@@ -455,7 +466,13 @@ pub fn peer_identity(conn: &rustls::ServerConnection) -> Option<PeerIdentity>;
 ```
 
 Hub (dev02) is the only one that calls `Router` methods. `HubCmd`:
-`Connected{handle, reply}`, `Event{id, Event}`, `Disconnected{id}`, `Mgmt{req, oneshot}`, `Tick`.
+`Connected{handle, reply: oneshot<ConnectVerdict /* Accepted | Banned */>}`, `Event{id, event: Box<Event>}`
+(boxed: clippy `large_enum_variant`, keeps the queue slot small), `Disconnected{id}`, `Mgmt{req, oneshot}`, `Tick`,
+and with feature `testkit` — `Settle{reply}` (barrier behind `HubHandle::settle()`).
+Feature `testkit` (never enabled in release binaries; qa01 A.2): `FakeClock`, `taky_cot::testkit::TestOutbox`,
+`Router::persist_snapshot()`, `Router::find_clients(..)`, `HubHandle::settle()`. Server and DPS start on ready
+listeners: `taky_server::start(ServerOptions, Listeners)`, `taky_dps::start(DpsOptions, TcpListener)` (qa01 A.3).
+(§14 updated after the T-10 review, arch01/handoff/review-T-10.md.)
 dev01 tests use `TestOutbox` (VecDeque) — no tokio network.
 
 ---
@@ -474,7 +491,7 @@ dev01 tests use `TestOutbox` (VecDeque) — no tokio network.
 
 ## 16. Dependencies
 
-### 16.1 Main (versions verified by `cargo check` in arch01/work/depcheck, 2026-10-18; pinned by `Cargo.lock`)
+### 16.1 Main (versions verified by `cargo check` in arch01/work/depcheck, 2026-10-18; pinned by `Cargo.lock`; quick-xml/zip bumped in T-10 for RUSTSEC fixes)
 
 | Crate | Version | License | Where | Why |
 |---|---|---|---|---|
@@ -492,7 +509,7 @@ dev01 tests use `TestOutbox` (VecDeque) — no tokio network.
 | pkcs8 | 0.10 (`encryption`, `3des`) | Apache-2.0 OR MIT | pki | PKCS#8 encrypted keys |
 | der | 0.7 | Apache-2.0 OR MIT | pki | ASN.1 for the PKCS#12 encoder |
 | des / cbc / aes / sha1 / sha2 / hmac / md-5 | 0.8 / 0.1 / 0.8 / 0.10 / 0.10 / 0.12 / 0.10 | MIT OR Apache-2.0 | pki | PKCS#12 PBE 3DES, MAC, legacy PEM |
-| quick-xml | 0.38 | MIT | xml | XML tokenizer |
+| quick-xml | 0.42 (≥ 0.41 required: RUSTSEC-2026-0194/0195) | MIT | xml | XML tokenizer |
 | axum | 0.8 (`http1`, `multipart`, `query`, `json`) | MIT | dps | HTTP |
 | hyper / hyper-util | 1.x / 0.1 | MIT | dps | server, accept loop |
 | tower / tower-http | 0.5 / 0.6 (`fs`, `trace`) | MIT | dps | middleware, ServeFile/Range |
@@ -503,7 +520,7 @@ dev01 tests use `TestOutbox` (VecDeque) — no tokio network.
 | serde / serde_json (`preserve_order`, `arbitrary_precision`) | 1 / 1 | MIT OR Apache-2.0 | common, dps, server, takyctl | JSON; `arbitrary_precision` — serials up to 159 bits in mgmt `revoked_sns` without loss of precision |
 | chrono | 0.4 (`clock`, `std`) | MIT OR Apache-2.0 | cot, pki | naive UTC datetimes |
 | uuid | 1 (`v4`) | Apache-2.0 OR MIT | takyctl | names in the data package |
-| zip | 2.x (`deflate`) | MIT | takyctl | data package |
+| zip | 9 (`default-features = false`, `deflate-flate2-zlib-rs`; ≥ 9 required: RUSTSEC-2026-0367..0369) | MIT | takyctl | data package (write-only; we never extract) |
 | unicode-normalization | 0.1 | MIT OR Apache-2.0 | dps | `secure_filename` (NFKD) |
 | mime_guess | 2 | MIT | dps | mimetype for `send_file` |
 | rand | 0.8 | MIT OR Apache-2.0 | pki | serials, salts |
@@ -527,8 +544,10 @@ insert the TLS identity at the connection level, more dependencies), `axum-serve
 ### 16.3 cargo-deny (T-10, dev01; CI mandatory)
 `deny.toml`: `[licenses] allow = ["MIT", "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "BSD-2-Clause",
 "BSD-3-Clause", "ISC", "Zlib", "Unicode-3.0", "0BSD", "BSL-1.0", "Unlicense"]`, `confidence-threshold = 0.9`,
-`[[licenses.clarify]]` for `ring`; `[bans] multiple-versions = "warn"`, `deny = [{name="openssl-sys"},
-{name="aws-lc-sys"}, {name="webpki-roots"}]`; `[advisories]` — deny; exception `RUSTSEC-2023-0071`
+`[[licenses.clarify]]` for `ring` (kept as a safety net; currently inert because ring 0.17.14 declares
+`Apache-2.0 AND ISC` in its metadata — update the LICENSE hash on a ring upgrade);
+`unused-allowed-license = "allow"`, `[licenses.private] ignore = true`; `[bans] multiple-versions = "warn"`, `deny = [{name="openssl-sys"},
+{name="aws-lc-sys"}, {name="webpki-roots"}]`, `wildcards = "deny"`; `[advisories]` — deny, `yanked = "deny"`; exception `RUSTSEC-2023-0071`
 (rsa, Marvin — timing on **decryption**; we only generate keys and sign offline in takyctl) —
 with a comment and arch01 review; `[sources] unknown-registry = "deny"`, `unknown-git = "deny"`.
 `cargo-deny` is not installed in the container — dev01 installs it with `cargo install cargo-deny --locked` in T-10.
