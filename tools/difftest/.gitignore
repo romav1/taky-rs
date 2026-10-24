@@ -1,0 +1,3 @@
+# Generated difftest state: per-vector work dirs, test-only PKI, server logs, redis dir. Never commit.
+/.state/
+__pycache__/

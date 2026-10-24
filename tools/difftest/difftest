@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# difftest entry point (qa01, T-11). Uses the reference venv of tools/pyref (same lock file,
+# lxml/cryptography/Flask/redis versions = T-06 freeze). Usage: see `difftest --help`.
+#   cd taky-rs && tools/difftest/difftest --target py --all
+# Generated state: tools/difftest/.state/ (git-ignored); report: target/qa/difftest/.
+set -euo pipefail
+DIFFTEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$DIFFTEST_DIR/../pyref/common.sh"   # PY, TAKY_SRC, PYREF_BIND_IP, PYTHONDONTWRITEBYTECODE=1
+
+if pid_alive taky || pid_alive taky_dps; then
+    die "the pyref bench is up on $PYREF_BIND_IP (ports 8089/8443 are needed); run tools/pyref/down.sh first"
+fi
+"$PYREF_DIR/venv.sh" >/dev/null 2>&1 || "$PYREF_DIR/venv.sh"
+
+VECTORS_TOOLS="$TAKYRS_ROOT/../shared/spec/vectors/tools"
+export PYTHONPATH="$DIFFTEST_DIR:$TAKY_SRC:$VECTORS_TOOLS"
+export PYREF_BIND_IP TAKY_SRC
+exec "$PY" -W ignore -m harness "$@"
