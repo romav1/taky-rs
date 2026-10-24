@@ -1,0 +1,130 @@
+{
+  "id": "V054",
+  "title": "Unknown entity: rest of the chunk is lost, parser restarts as a bare document, the 2nd next event disconnects",
+  "runner": "cot",
+  "tags": [
+    "errors",
+    "libxml2-dependent",
+    "quirk"
+  ],
+  "source_refs": [
+    "taky/taky/cot/client.py:186",
+    "taky/taky/cot/client.py:123"
+  ],
+  "notes": "Observed with lxml 6.1.3 / libxml2 2.14.6 (an01/work/probes/entity_quirk_probe.py, dev01 quirk_unknown_entity_restart): after '&foo;' libxml2 discards the rest of that feed() chunk (M-2 lost), then re-parses as a bare document without <root>: the next top-level element (M-3) becomes the document element and is emitted, the one after (M-4) raises 'Extra content at the end of the document' -> disconnect. Chunk = one recv(4096) after XMLDeclStrip, so over real TCP the outcome depends on segmentation. D-23: Rust drops only the enclosing event and keeps parsing (ADR-002).",
+  "now": "2030-01-01T00:00:00Z",
+  "config": {},
+  "clients": {
+    "A": {
+      "kind": "cot"
+    },
+    "B": {
+      "kind": "cot"
+    }
+  },
+  "steps": [
+    {
+      "op": "connect",
+      "client": "A",
+      "expect": {
+        "deliveries": {}
+      }
+    },
+    {
+      "op": "connect",
+      "client": "B",
+      "expect": {
+        "deliveries": {}
+      }
+    },
+    {
+      "op": "send",
+      "client": "A",
+      "chunks": [
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><event version=\"2.0\" uid=\"M-1\" type=\"a-u-G\" time=\"2030-01-01T00:00:00.000Z\" start=\"2030-01-01T00:00:00.000Z\" stale=\"2030-01-01T00:10:00.000Z\" how=\"h-g-i-g-o\"><point lat=\"54.338986\" lon=\"9.755263\" hae=\"0.0\" ce=\"9999999.0\" le=\"9999999.0\"/><detail><contact callsign=\"Marker 1\"/><remarks>&foo;</remarks></detail></event><?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><event version=\"2.0\" uid=\"M-2\" type=\"a-u-G\" time=\"2030-01-01T00:00:00.000Z\" start=\"2030-01-01T00:00:00.000Z\" stale=\"2030-01-01T00:10:00.000Z\" how=\"h-g-i-g-o\"><point lat=\"54.338986\" lon=\"9.755263\" hae=\"0.0\" ce=\"9999999.0\" le=\"9999999.0\"/><detail><contact callsign=\"Marker 1\"/></detail></event>"
+      ],
+      "rust_expect": {
+        "deliveries": {
+          "B": [
+            "<event version=\"2.0\" uid=\"M-2\" type=\"a-u-G\" how=\"h-g-i-g-o\" time=\"2030-01-01T00:00:00.000Z\" start=\"2030-01-01T00:00:00.000Z\" stale=\"2030-01-01T00:10:00.000Z\"><point lat=\"54.338986\" lon=\"9.755263\" hae=\"0.0\" ce=\"9999999.0\" le=\"9999999.0\"/><detail><contact callsign=\"Marker 1\"/></detail></event>"
+          ]
+        }
+      },
+      "expect": {
+        "deliveries": {}
+      }
+    },
+    {
+      "op": "send",
+      "client": "A",
+      "chunks": [
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><event version=\"2.0\" uid=\"M-3\" type=\"a-u-G\" time=\"2030-01-01T00:00:00.000Z\" start=\"2030-01-01T00:00:00.000Z\" stale=\"2030-01-01T00:10:00.000Z\" how=\"h-g-i-g-o\"><point lat=\"54.338986\" lon=\"9.755263\" hae=\"0.0\" ce=\"9999999.0\" le=\"9999999.0\"/><detail><contact callsign=\"Marker 1\"/></detail></event>"
+      ],
+      "expect": {
+        "deliveries": {
+          "B": [
+            "<event version=\"2.0\" uid=\"M-3\" type=\"a-u-G\" how=\"h-g-i-g-o\" time=\"2030-01-01T00:00:00.000Z\" start=\"2030-01-01T00:00:00.000Z\" stale=\"2030-01-01T00:10:00.000Z\"><point lat=\"54.338986\" lon=\"9.755263\" hae=\"0.0\" ce=\"9999999.0\" le=\"9999999.0\"/><detail><contact callsign=\"Marker 1\"/></detail></event>"
+          ]
+        }
+      }
+    },
+    {
+      "op": "send",
+      "client": "A",
+      "chunks": [
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><event version=\"2.0\" uid=\"M-4\" type=\"a-u-G\" time=\"2030-01-01T00:00:00.000Z\" start=\"2030-01-01T00:00:00.000Z\" stale=\"2030-01-01T00:10:00.000Z\" how=\"h-g-i-g-o\"><point lat=\"54.338986\" lon=\"9.755263\" hae=\"0.0\" ce=\"9999999.0\" le=\"9999999.0\"/><detail><contact callsign=\"Marker 1\"/></detail></event>"
+      ],
+      "rust_expect": {
+        "deliveries": {
+          "B": [
+            "<event version=\"2.0\" uid=\"M-4\" type=\"a-u-G\" how=\"h-g-i-g-o\" time=\"2030-01-01T00:00:00.000Z\" start=\"2030-01-01T00:00:00.000Z\" stale=\"2030-01-01T00:10:00.000Z\"><point lat=\"54.338986\" lon=\"9.755263\" hae=\"0.0\" ce=\"9999999.0\" le=\"9999999.0\"/><detail><contact callsign=\"Marker 1\"/></detail></event>"
+          ]
+        }
+      },
+      "expect": {
+        "deliveries": {},
+        "server_closed": [
+          "A"
+        ]
+      }
+    }
+  ],
+  "expected-divergence": [
+    "D-23"
+  ],
+  "final_rust_expect": {
+    "persist": {
+      "backend": "memory",
+      "uids": [
+        "M-2",
+        "M-3",
+        "M-4"
+      ]
+    }
+  },
+  "final_expect": {
+    "persist": {
+      "backend": "memory",
+      "uids": [
+        "M-3"
+      ]
+    }
+  },
+  "format": 2,
+  "requires": [
+    "persist-hook"
+  ],
+  "verified_against": {
+    "oracle": "python taky 0.9 (tools/run_python.py)",
+    "versions": [
+      "python 3.13.17",
+      "lxml 6.1.3",
+      "libxml2 2.14.6",
+      "python-dateutil 3.0.0",
+      "cryptography 50.0.2",
+      "fakeredis 2.40.0",
+      "Flask 2.3.3",
+      "Werkzeug 3.1.9"
+    ]
+  }
+}

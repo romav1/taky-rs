@@ -16,9 +16,19 @@ pub struct Element {
     pub tail: Option<String>,
     /// Child nodes (elements, comments, PIs) in document order.
     pub children: Vec<Node>,
-    /// Namespace declarations of this element `(prefix, uri)` (`None` — default ns);
-    /// needed by the serializer to reproduce prefixes like lxml.
+    /// Namespace declarations of this element `(prefix, uri)` in document order (`None` — default
+    /// ns; `xmlns=""` is kept as `(None, "")`); written verbatim by the serializer (libxml2 `nsDef`).
+    /// An event emitted by [`crate::TreeBuilder`] also carries the declarations inherited from its
+    /// ancestors, appended nearest ancestor first (what `etree.tostring` copies onto a subtree).
     pub nsmap: Vec<(Option<String>, String)>,
+    /// Prefix a namespaced tag was written with (`Some("")` — unprefixed, default namespace),
+    /// recorded by the parser: libxml2 prints the original prefix even when several prefixes bind
+    /// the same URI. `None` (an element built in code) — the serializer picks one like lxml.
+    pub prefix: Option<String>,
+    /// Original prefixes of namespaced attributes: `(index into attrs, prefix)`. Filled by the
+    /// parser; [`Element::set`] never reorders `attrs`, so the indices stay valid. A namespaced
+    /// attribute without an entry gets a prefix chosen like lxml does for `elm.set("{uri}k", v)`.
+    pub attr_prefixes: Vec<(usize, String)>,
 }
 
 /// Child node of an element.
@@ -37,7 +47,7 @@ pub enum Node {
     Pi {
         /// PI target.
         target: String,
-        /// PI data.
+        /// PI data (`None` — `<?target?>` with no whitespace after the target).
         data: Option<String>,
         /// Text after the PI.
         tail: Option<String>,
@@ -82,6 +92,14 @@ impl Element {
     /// `elm.find(tag)` — the first direct child with the given tag.
     pub fn find(&self, tag: &str) -> Option<&Element> {
         self.child_elements().find(|e| e.tag == tag)
+    }
+
+    /// Prefix recorded for attribute number `idx` (see [`Element::attr_prefixes`]).
+    pub fn attr_prefix(&self, idx: usize) -> Option<&str> {
+        self.attr_prefixes
+            .iter()
+            .find(|(i, _)| *i == idx)
+            .map(|(_, p)| p.as_str())
     }
 
     /// `elm.append(child)`.

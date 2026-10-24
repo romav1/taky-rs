@@ -1,0 +1,89 @@
+{
+  "id": "V056",
+  "title": "Malformed reference that libxml2 does reject: '&' in an attribute value, '&#0;' -> disconnect",
+  "runner": "cot",
+  "tags": [
+    "errors",
+    "parsing"
+  ],
+  "source_refs": [
+    "taky/taky/cot/client.py:186",
+    "taky/taky/cot/client.py:123"
+  ],
+  "notes": "Parity (no divergence): libxml2 2.14.6 raises 'xmlParseEntityRef: no name' for '&' in an attribute value and 'xmlParseCharRef: invalid xmlChar value 0' for '&#0;' -> XMLSyntaxError -> disconnect, in the same chunk.",
+  "now": "2030-01-01T00:00:00Z",
+  "config": {},
+  "clients": {
+    "A": {
+      "kind": "cot"
+    },
+    "B": {
+      "kind": "cot"
+    }
+  },
+  "steps": [
+    {
+      "op": "connect",
+      "client": "A",
+      "expect": {
+        "deliveries": {}
+      }
+    },
+    {
+      "op": "connect",
+      "client": "B",
+      "expect": {
+        "deliveries": {}
+      }
+    },
+    {
+      "op": "send",
+      "client": "A",
+      "chunks": [
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><event version=\"2.0\" uid=\"M-1\" type=\"a-u-G\" time=\"2030-01-01T00:00:00.000Z\" start=\"2030-01-01T00:00:00.000Z\" stale=\"2030-01-01T00:10:00.000Z\" how=\"h-g-i-g-o\"><point lat=\"54.338986\" lon=\"9.755263\" hae=\"0.0\" ce=\"9999999.0\" le=\"9999999.0\"/><detail><contact callsign=\"Marker 1\"/><remarks a=\"x & y\"/></detail></event>"
+      ],
+      "expect": {
+        "deliveries": {},
+        "server_closed": [
+          "A"
+        ]
+      }
+    },
+    {
+      "op": "send",
+      "client": "B",
+      "chunks": [
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><event version=\"2.0\" uid=\"M-2\" type=\"a-u-G\" time=\"2030-01-01T00:00:00.000Z\" start=\"2030-01-01T00:00:00.000Z\" stale=\"2030-01-01T00:10:00.000Z\" how=\"h-g-i-g-o\"><point lat=\"54.338986\" lon=\"9.755263\" hae=\"0.0\" ce=\"9999999.0\" le=\"9999999.0\"/><detail><contact callsign=\"Marker 1\"/><remarks>&#0;</remarks></detail></event>"
+      ],
+      "expect": {
+        "deliveries": {},
+        "server_closed": [
+          "B"
+        ]
+      }
+    }
+  ],
+  "final_expect": {
+    "persist": {
+      "backend": "memory",
+      "uids": []
+    }
+  },
+  "format": 2,
+  "requires": [
+    "persist-hook"
+  ],
+  "verified_against": {
+    "oracle": "python taky 0.9 (tools/run_python.py)",
+    "versions": [
+      "python 3.13.17",
+      "lxml 6.1.3",
+      "libxml2 2.14.6",
+      "python-dateutil 3.0.0",
+      "cryptography 50.0.2",
+      "fakeredis 2.40.0",
+      "Flask 2.3.3",
+      "Werkzeug 3.1.9"
+    ]
+  }
+}

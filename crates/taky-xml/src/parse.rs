@@ -554,11 +554,14 @@ impl Tree {
         if self.frames.is_empty() {
             return Ok(());
         }
-        let data = inner[tlen..].trim_start_matches([' ', '\t', '\r', '\n']);
+        // libxml2 stores no content for `<?p?>` but an empty one for `<?p ?>`; the serializer
+        // writes them back as `<?p?>` and `<?p ?>` (lxml's `.text` is `''` for both).
+        let data = (tlen < inner.len())
+            .then(|| eol(inner[tlen..].trim_start_matches([' ', '\t', '\r', '\n'])).into_owned());
         self.count_node()?;
         self.push_node(Node::Pi {
             target: target.to_owned(),
-            data: Some(eol(data).into_owned()),
+            data,
             tail: None,
         });
         Ok(())
@@ -703,6 +706,10 @@ impl Tree {
         let ns_len = self.ns.len();
         let mut elem = Element::default();
         for (p, uri) in decls {
+            if p.as_deref() == Some("xml") && uri == XML_NS {
+                // Redundant `xmlns:xml` declaration: libxml2 accepts it and does not record it.
+                continue;
+            }
             match (p, uri.is_empty()) {
                 // `xmlns:p=""` is a namespace error in libxml2: ignored, the outer binding stays
                 // (fatal for `etree.fromstring`).
@@ -712,7 +719,10 @@ impl Tree {
                     }
                 }
                 // `xmlns=""` unbinds the default namespace.
-                (None, true) => self.ns.push((None, None)),
+                (None, true) => {
+                    elem.nsmap.push((None, String::new()));
+                    self.ns.push((None, None));
+                }
                 (p, false) => {
                     elem.nsmap.push((p.clone(), uri.clone()));
                     self.ns.push((p, Some(uri)));
@@ -733,9 +743,17 @@ impl Tree {
         let (tag, ns, local) = self.resolve(qname, false, off)?;
         let is_event = self.mode == Mode::Stream && local == "event" && ns.is_none();
         elem.tag = tag;
+        elem.prefix = match ns.as_deref() {
+            Some(uri) if uri != XML_NS && !qname.contains(':') => Some(String::new()),
+            ns => orig_prefix(qname, ns),
+        };
         let mut attrs = Vec::with_capacity(raw.len());
-        for (k, v) in raw {
-            attrs.push((self.resolve(k, true, off)?.0, v));
+        for (i, (k, v)) in raw.into_iter().enumerate() {
+            let (name, ns, _) = self.resolve(k, true, off)?;
+            if let Some(p) = orig_prefix(k, ns.as_deref()) {
+                elem.attr_prefixes.push((i, p));
+            }
+            attrs.push((name, v));
         }
         elem.attrs = attrs;
         self.frames.push(Frame {
@@ -779,6 +797,32 @@ impl Tree {
         }
     }
 
+    /// `etree.tostring` of an element below the document root writes a shallow copy of it
+    /// (`xmlCopyNode(node, 2)`): its own declarations, then — while copying the attributes —
+    /// a declaration for every prefix an attribute uses that is declared on an ancestor (attribute
+    /// order, `xmlCopyProp`), then every other namespace declared on its ancestors, nearest
+    /// first, each in declaration order, unless the prefix is already declared on the copy
+    /// (`_copyParentNamespaces` + `xmlNewNs`). The emitted event is a detached copy, so the
+    /// inherited declarations are added to its `nsmap` here.
+    fn inherit_ns(&self, e: &mut Element, own_ns_len: usize) {
+        for (i, (k, _)) in e.attrs.iter().enumerate() {
+            if let (Some(p), Some((uri, _))) = (e.attr_prefix(i), crate::serialize::split_clark(k))
+                && e.nsmap.iter().all(|(q, _)| q.as_deref() != Some(p))
+            {
+                e.nsmap.push((Some(p.to_owned()), uri.to_owned()));
+            }
+        }
+        let mut end = own_ns_len;
+        for f in self.frames.iter().rev() {
+            for (p, uri) in &self.ns[f.ns_len..end] {
+                if e.nsmap.iter().all(|(q, _)| q != p) {
+                    e.nsmap.push((p.clone(), uri.clone().unwrap_or_default()));
+                }
+            }
+            end = f.ns_len;
+        }
+    }
+
     /// Close the innermost element.
     fn close(&mut self) {
         let Some(f) = self.frames.pop() else {
@@ -787,10 +831,14 @@ impl Tree {
         self.ns.truncate(f.ns_len);
         let mut elem = f.elem;
         if f.is_event {
-            // `elm.clear(keep_tail=True)`: same tag, no attributes/text/children.
-            let placeholder = Element::new(elem.tag.clone());
-            let done = std::mem::replace(&mut elem, placeholder);
+            // `elm.clear(keep_tail=True)`: same tag, no attributes/text/children; libxml2 keeps
+            // the element's own namespace declarations.
+            let mut placeholder = Element::new(elem.tag.clone());
+            placeholder.nsmap = elem.nsmap.clone();
+            placeholder.prefix = elem.prefix.clone();
+            let mut done = std::mem::replace(&mut elem, placeholder);
             if !f.dropped {
+                self.inherit_ns(&mut done, f.ns_len);
                 self.out.push_back(done);
                 self.tail_to = Some(self.out.len() - 1);
             }
@@ -804,6 +852,14 @@ impl Tree {
                 }
             }
         }
+    }
+}
+
+/// Prefix of `qname` worth recording: only for a name resolved to a namespace other than `xml:`.
+fn orig_prefix(qname: &str, ns: Option<&str>) -> Option<String> {
+    match (qname.split_once(':'), ns) {
+        (Some((p, _)), Some(uri)) if uri != XML_NS => Some(p.to_owned()),
+        _ => None,
     }
 }
 

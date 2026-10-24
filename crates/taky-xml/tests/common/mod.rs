@@ -41,7 +41,10 @@ fn node(n: &Node) -> Value {
     match n {
         Node::Element(e) => dump(e),
         Node::Comment { text, tail } => json!({"comment": text, "tail": tail}),
-        Node::Pi { target, data, tail } => json!({"pi": target, "data": data, "tail": tail}),
+        Node::Pi { target, data, tail } => {
+            // lxml's `.text` of a PI is `''` also when libxml2 stores no content (`<?p?>`).
+            json!({"pi": target, "data": data.as_deref().unwrap_or(""), "tail": tail})
+        }
     }
 }
 

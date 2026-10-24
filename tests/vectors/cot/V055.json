@@ -1,0 +1,120 @@
+{
+  "id": "V055",
+  "title": "Bare '&' / unterminated '&#65' in text: libxml2 silently stops parsing forever (zombie connection)",
+  "runner": "cot",
+  "tags": [
+    "errors",
+    "libxml2-dependent",
+    "quirk",
+    "bug"
+  ],
+  "source_refs": [
+    "taky/taky/cot/client.py:186",
+    "taky/taky/cot/client.py:123"
+  ],
+  "notes": "Observed with lxml 6.1.3 / libxml2 2.14.6: a '&' not followed by a name, or a char ref without ';', in element text never raises; the pull parser silently stops emitting anything for the rest of the connection (no pong, no routing, socket stays open until the client goes away). D-23: Rust treats a malformed reference as a stream error -> disconnect 'XML Syntax Error' (steps 3-4 then observe nothing on either side; a send to a server-closed client is a no-op).",
+  "now": "2030-01-01T00:00:00Z",
+  "config": {},
+  "clients": {
+    "A": {
+      "kind": "cot"
+    },
+    "B": {
+      "kind": "cot"
+    }
+  },
+  "steps": [
+    {
+      "op": "connect",
+      "client": "A",
+      "expect": {
+        "deliveries": {}
+      }
+    },
+    {
+      "op": "connect",
+      "client": "B",
+      "expect": {
+        "deliveries": {}
+      }
+    },
+    {
+      "op": "send",
+      "client": "A",
+      "chunks": [
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><event version=\"2.0\" uid=\"M-1\" type=\"a-u-G\" time=\"2030-01-01T00:00:00.000Z\" start=\"2030-01-01T00:00:00.000Z\" stale=\"2030-01-01T00:10:00.000Z\" how=\"h-g-i-g-o\"><point lat=\"54.338986\" lon=\"9.755263\" hae=\"0.0\" ce=\"9999999.0\" le=\"9999999.0\"/><detail><contact callsign=\"Marker 1\"/><remarks>a & b</remarks></detail></event>"
+      ],
+      "rust_expect": {
+        "deliveries": {},
+        "server_closed": [
+          "A"
+        ]
+      },
+      "expect": {
+        "deliveries": {}
+      }
+    },
+    {
+      "op": "send",
+      "client": "B",
+      "chunks": [
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><event version=\"2.0\" uid=\"M-2\" type=\"a-u-G\" time=\"2030-01-01T00:00:00.000Z\" start=\"2030-01-01T00:00:00.000Z\" stale=\"2030-01-01T00:10:00.000Z\" how=\"h-g-i-g-o\"><point lat=\"54.338986\" lon=\"9.755263\" hae=\"0.0\" ce=\"9999999.0\" le=\"9999999.0\"/><detail><contact callsign=\"Marker 1\"/><remarks>&#65</remarks></detail></event>"
+      ],
+      "rust_expect": {
+        "deliveries": {},
+        "server_closed": [
+          "B"
+        ]
+      },
+      "expect": {
+        "deliveries": {}
+      }
+    },
+    {
+      "op": "send",
+      "client": "A",
+      "chunks": [
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><event version=\"2.0\" uid=\"ANDROID-A-ping\" type=\"t-x-c-t\" time=\"2030-01-01T00:00:00.000Z\" start=\"2030-01-01T00:00:00.000Z\" stale=\"2030-01-01T00:00:10.000Z\" how=\"m-g\"><point lat=\"0.0\" lon=\"0.0\" hae=\"0.0\" ce=\"9999999.0\" le=\"9999999.0\"/><detail/></event>"
+      ],
+      "expect": {
+        "deliveries": {}
+      }
+    },
+    {
+      "op": "send",
+      "client": "B",
+      "chunks": [
+        "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?><event version=\"2.0\" uid=\"M-3\" type=\"a-u-G\" time=\"2030-01-01T00:00:00.000Z\" start=\"2030-01-01T00:00:00.000Z\" stale=\"2030-01-01T00:10:00.000Z\" how=\"h-g-i-g-o\"><point lat=\"54.338986\" lon=\"9.755263\" hae=\"0.0\" ce=\"9999999.0\" le=\"9999999.0\"/><detail><contact callsign=\"Marker 1\"/></detail></event>"
+      ],
+      "expect": {
+        "deliveries": {}
+      }
+    }
+  ],
+  "expected-divergence": [
+    "D-23"
+  ],
+  "final_expect": {
+    "persist": {
+      "backend": "memory",
+      "uids": []
+    }
+  },
+  "format": 2,
+  "requires": [
+    "persist-hook"
+  ],
+  "verified_against": {
+    "oracle": "python taky 0.9 (tools/run_python.py)",
+    "versions": [
+      "python 3.13.17",
+      "lxml 6.1.3",
+      "libxml2 2.14.6",
+      "python-dateutil 3.0.0",
+      "cryptography 50.0.2",
+      "fakeredis 2.40.0",
+      "Flask 2.3.3",
+      "Werkzeug 3.1.9"
+    ]
+  }
+}
