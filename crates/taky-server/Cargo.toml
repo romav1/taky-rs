@@ -1,0 +1,39 @@
+[package]
+name = "taky-server"
+description = "taky-rs: CoT server (TCP/TLS listeners, monitor, Hub actor, mgmt unix socket), binary taky-rs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "taky-rs"
+path = "src/bin/taky-rs.rs"
+
+[features]
+## qa01 test hooks: Hub::settle and everything from taky-cot/testkit.
+testkit = ["taky-cot/testkit", "taky-common/testkit"]
+
+[dependencies]
+taky-common.workspace = true
+taky-config.workspace = true
+taky-cot.workspace = true
+taky-pki.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tokio-rustls.workspace = true
+bytes.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+assert_cmd.workspace = true
+
+[lints]
+workspace = true

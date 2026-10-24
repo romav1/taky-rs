@@ -1,0 +1,31 @@
+[package]
+name = "taky-cot"
+description = "taky-rs: CoT models, streaming decoder, Router, Persistence, CoT log (sans-IO core)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[features]
+## qa01 test hooks: FakeClock, TestOutbox, Router::persist_snapshot/find_clients.
+testkit = ["taky-common/testkit"]
+
+[dependencies]
+taky-common.workspace = true
+taky-config.workspace = true
+taky-xml.workspace = true
+redis.workspace = true
+bytes.workspace = true
+chrono.workspace = true
+tokio = { workspace = true }
+tokio-util.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+taky-common = { workspace = true, features = ["testkit"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,27 @@
+[package]
+name = "taky-common"
+description = "taky-rs: version, Python-logging-style logging, py-compat helpers, clock, shutdown"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[features]
+## Test hooks (FakeClock). Not enabled in release builds of the binaries.
+testkit = []
+
+[dependencies]
+tracing.workspace = true
+tracing-subscriber.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+tokio-util.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true }
+
+[lints]
+workspace = true

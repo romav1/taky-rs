@@ -1,0 +1,33 @@
+[package]
+name = "takyctl"
+description = "taky-rs: CLI takyctl-rs (setup, build_client, systemd, status, kickban)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "takyctl-rs"
+path = "src/main.rs"
+
+[dependencies]
+taky-common.workspace = true
+taky-config.workspace = true
+taky-pki.workspace = true
+taky-xml.workspace = true
+taky-server.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+serde_json.workspace = true
+zip.workspace = true
+uuid.workspace = true
+nix.workspace = true
+tempfile.workspace = true
+
+[dev-dependencies]
+assert_cmd.workspace = true
+
+[lints]
+workspace = true

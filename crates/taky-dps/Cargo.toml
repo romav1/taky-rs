@@ -1,0 +1,46 @@
+[package]
+name = "taky-dps"
+description = "taky-rs: Data Package Server (Marti API on axum + rustls), binary taky_dps-rs"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "taky_dps-rs"
+path = "src/bin/taky_dps-rs.rs"
+
+[features]
+## qa01 test hooks (FakeClock for SubmissionDateTime).
+testkit = ["taky-common/testkit"]
+
+[dependencies]
+taky-common.workspace = true
+taky-config.workspace = true
+taky-pki.workspace = true
+taky-xml.workspace = true
+axum.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+tokio.workspace = true
+tokio-rustls.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+unicode-normalization.workspace = true
+mime_guess.workspace = true
+tempfile.workspace = true
+chrono.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+assert_cmd.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,90 @@
+[workspace]
+# All crates live in crates/*; crates/taky-testkit (qa01, T-11) is picked up automatically.
+members = ["crates/*"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+authors = ["Taky-rs contributors"]
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+# ARCHITECTURE §7: no unwrap()/expect() outside tests (clippy.toml allows them in tests).
+unwrap_used = "deny"
+expect_used = "deny"
+
+[workspace.dependencies]
+# --- internal crates ---
+taky-common = { path = "crates/taky-common", version = "0.1.0" }
+taky-config = { path = "crates/taky-config", version = "0.1.0" }
+taky-xml = { path = "crates/taky-xml", version = "0.1.0" }
+taky-cot = { path = "crates/taky-cot", version = "0.1.0" }
+taky-pki = { path = "crates/taky-pki", version = "0.1.0" }
+taky-server = { path = "crates/taky-server", version = "0.1.0" }
+taky-dps = { path = "crates/taky-dps", version = "0.1.0" }
+
+# --- external (ARCHITECTURE §16.1; versions checked by arch01/work/depcheck) ---
+tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "net", "io-util", "signal", "sync", "time", "fs"] }
+tokio-util = { version = "0.7", features = ["codec", "rt"] }
+bytes = "1.12"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+rustls-pki-types = { version = "1.15", features = ["std"] }
+rustls-native-certs = "0.8"
+x509-parser = "0.18"
+rcgen = { version = "0.14", default-features = false, features = ["pem", "x509-parser", "crypto", "ring"] }
+rsa = { version = "0.9", features = ["pem"] }
+pkcs8 = { version = "0.10", features = ["encryption", "pem", "3des"] }
+der = "0.7"
+des = "0.8"
+cbc = "0.1"
+aes = "0.8"
+sha1 = "0.10"
+sha2 = "0.10"
+hmac = "0.12"
+md-5 = "0.10"
+quick-xml = "0.42" # >=0.41 required: RUSTSEC-2026-0194, RUSTSEC-2026-0195 (S-203)
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "query", "multipart", "json"] }
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio", "server", "service", "http1"] }
+tower = "0.5"
+tower-http = { version = "0.6", features = ["fs", "trace"] }
+# Without tls-rustls-webpki-roots (webpki-roots is forbidden in deny.toml, §16.1).
+redis = { version = "0.32", default-features = false, features = ["tokio-comp", "connection-manager", "tokio-rustls-comp"] }
+# `string`: runtime prog name and version text for argparse-style `--version` (S-201).
+clap = { version = "4.6", features = ["derive", "string"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std", "ansi", "env-filter"] }
+thiserror = "2"
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+uuid = { version = "1", features = ["v4"] }
+zip = { version = "9", default-features = false, features = ["deflate-flate2-zlib-rs"] } # >=9 required: RUSTSEC-2026-0367..0369 (S-203)
+unicode-normalization = "0.1"
+mime_guess = "2"
+rand = "0.8"
+nix = { version = "0.30", default-features = false, features = ["user", "fs"] }
+tempfile = "3"
+
+# --- dev-only ---
+p12-keystore = "0.4"
+proptest = "1"
+assert_cmd = "2"
+libtest-mimic = "0.8"
+
+[profile.release]
+# ADR-007
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+panic = "unwind"

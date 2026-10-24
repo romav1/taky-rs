@@ -1,0 +1,3 @@
+# Cargo build output
+/target/
+# Cargo.lock is committed (binaries; versions pinned per ARCHITECTURE §16.1)

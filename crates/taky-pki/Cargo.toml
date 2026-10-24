@@ -1,0 +1,37 @@
+[package]
+name = "taky-pki"
+description = "taky-rs: cert-db, PEM/keys, rustls configs, PeerIdentity, certificate and PKCS#12 generation"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+taky-common.workspace = true
+taky-config.workspace = true
+rustls.workspace = true
+rustls-pki-types.workspace = true
+rustls-native-certs.workspace = true
+x509-parser.workspace = true
+rcgen.workspace = true
+rsa.workspace = true
+pkcs8.workspace = true
+der.workspace = true
+des.workspace = true
+cbc.workspace = true
+aes.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+hmac.workspace = true
+md-5.workspace = true
+rand.workspace = true
+chrono.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+p12-keystore.workspace = true
+
+[lints]
+workspace = true

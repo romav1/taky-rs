@@ -1,0 +1,16 @@
+[package]
+name = "taky-config"
+description = "taky-rs: configparser-compatible INI and taky.conf loading (parity with taky/config.py)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+taky-common.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

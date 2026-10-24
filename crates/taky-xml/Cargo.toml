@@ -1,0 +1,16 @@
+[package]
+name = "taky-xml"
+description = "taky-rs: safe XML parser (no DTD/entities), mini-DOM, lxml-compatible serializer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[dependencies]
+quick-xml.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true
