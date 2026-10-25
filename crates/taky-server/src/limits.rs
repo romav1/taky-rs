@@ -14,3 +14,9 @@ pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 pub const WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 /// Hub `Tick` period (drives `Router::maybe_prune`).
 pub const TICK_INTERVAL: Duration = Duration::from_secs(1);
+/// Bytes per socket read (Python `recv(4096)`, spec §3.1): one chunk = one decoder feed.
+pub const READ_CHUNK: usize = 4096;
+/// Limit for the orderly close (`shutdown`, TLS `close_notify`) of a connection.
+pub const CLOSE_TIMEOUT: Duration = Duration::from_secs(2);
+/// Upper bound of the testkit barrier `HubHandle::settle` waiting for client sockets.
+pub const SETTLE_TIMEOUT: Duration = Duration::from_secs(5);

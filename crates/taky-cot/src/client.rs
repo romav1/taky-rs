@@ -46,6 +46,13 @@ pub trait Outbox: Send + Sync + 'static {
     /// Ask the connection task to disconnect, logging `reason` (e.g. `"Slow client"`).
     /// Idempotent; frames queued before the call may still be written.
     fn close(&self, reason: &str);
+
+    /// Frames accepted by [`Outbox::try_send`] but not yet written **and flushed** to the
+    /// socket; `0` once the connection is closed. Used by the testkit barrier
+    /// (`HubHandle::settle`, S-312). The default (in-memory outboxes) is `0`.
+    fn pending(&self) -> usize {
+        0
+    }
 }
 
 /// An `f64` stored as bits in an `AtomicU64` (for `last_rx`, an epoch timestamp).

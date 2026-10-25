@@ -6,13 +6,26 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
-use taky_common::{SharedClock, Shutdown};
+use taky_common::{SharedClock, Shutdown, pylog};
 use taky_config::TakyConfig;
+use taky_cot::{ClientId, ClientKind, Persistence, Router};
+use taky_pki::{CertDb, TlsMode, server_config};
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
+use tokio_rustls::TlsAcceptor;
+use tokio_util::task::TaskTracker;
+use tracing::Level;
 
-use crate::hub::HubHandle;
+use crate::conn::{self, ConnCtx};
+use crate::hub::{Hub, HubHandle};
+use crate::limits::CLOSE_TIMEOUT;
+
+const LGR: &str = "COTServer";
+/// Pause after a failed `accept` (e.g. out of descriptors).
+const ACCEPT_BACKOFF: Duration = Duration::from_millis(100);
 
 /// Sockets the server serves.
 #[derive(Debug)]
@@ -66,7 +79,160 @@ impl RunningServer {
 
 /// Start serving on `listeners`: TLS config + cert-db (if SSL), Persistence, Router, Hub,
 /// accept loops. Returns once everything is listening.
+///
+/// Errors (N-5): the binary logs ERROR `Unable to start COTServer: <err>` and exits 1 (spec §1.2
+/// item 4). The error's `Display` is the bare cause: an invalid `ssl.client_cert_required`
+/// (`Not a boolean: <v>`), a TLS/key/certificate or cert-db error ([`taky_pki::PkiError`]), an
+/// invalid `[taky] redis` URL ([`taky_cot::PersistError`]). An unreachable Redis is not an error.
+///
+/// The mgmt socket (`listeners.mgmt_socket`) is served from S-313.
 pub async fn start(opts: ServerOptions, listeners: Listeners) -> anyhow::Result<RunningServer> {
-    let _ = (opts, listeners);
-    todo!("dev02: S-314")
+    let cfg = &opts.cfg;
+    let (tls, cert_db) = if cfg.ssl.enabled {
+        // server.py:149 re-validates the key with getboolean (S-305 D-b).
+        let required = cfg
+            .raw()
+            .getboolean("ssl", "client_cert_required")
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+        if !required {
+            pylog!(
+                LGR,
+                Level::INFO,
+                "Clients will not need to present a certificate"
+            );
+        }
+        match cfg.ssl.ca.as_deref().filter(|p| !p.as_os_str().is_empty()) {
+            Some(ca) => pylog!(
+                LGR,
+                Level::INFO,
+                "Loading CA certificate from {}",
+                ca.display()
+            ),
+            None => pylog!(LGR, Level::INFO, "Using default CA certificates"),
+        }
+        let mut ssl = cfg.ssl.clone();
+        ssl.client_cert_required = required;
+        let sc = server_config(&ssl, TlsMode::Cot).map_err(|e| {
+            pylog!(LGR, Level::ERROR, "Unable to load SSL certificate: {e}");
+            anyhow::Error::new(e)
+        })?;
+        let db = CertDb::open(&cfg.ssl.cert_db)?;
+        (Some(TlsAcceptor::from(sc)), Some(db))
+    } else {
+        (None, None)
+    };
+
+    let persist = Persistence::from_config(cfg, opts.clock.clone()).await?;
+    let router = Router::new(cfg.cot_server.max_persist_ttl, persist, opts.clock.clone());
+    let (hub, hub_handle) = Hub::new(router, cert_db, opts.clock.clone());
+
+    let local_addr = listeners.cot.local_addr()?;
+    let monitor_addr = match &listeners.monitor {
+        Some(m) => Some(m.local_addr()?),
+        None => None,
+    };
+    let mode = if tls.is_some() { "ssl" } else { "tcp" };
+    pylog!(
+        LGR,
+        Level::INFO,
+        "Listening for {mode} on {}:{}",
+        local_addr.ip(),
+        local_addr.port()
+    );
+    if let Some(m) = monitor_addr {
+        pylog!(
+            LGR,
+            Level::INFO,
+            "Monitor listening for tcp on {}:{}",
+            m.ip(),
+            m.port()
+        );
+    }
+
+    let shutdown = opts.shutdown.clone();
+    let ctx = ConnCtx {
+        hub: hub_handle.clone(),
+        clock: opts.clock.clone(),
+        shutdown: shutdown.clone(),
+    };
+    let ids = Arc::new(AtomicU64::new(1));
+    let conns = TaskTracker::new();
+    let hub_task = tokio::spawn(hub.run(shutdown.clone()));
+    let mut accepts = vec![tokio::spawn(accept_loop(
+        listeners.cot,
+        ClientKind::Cot,
+        tls,
+        ctx.clone(),
+        ids.clone(),
+        conns.clone(),
+    ))];
+    if let Some(m) = listeners.monitor {
+        accepts.push(tokio::spawn(accept_loop(
+            m,
+            ClientKind::Monitor,
+            None,
+            ctx,
+            ids,
+            conns.clone(),
+        )));
+    }
+
+    let task = tokio::spawn(async move {
+        shutdown.wait().await;
+        for a in accepts {
+            let _ = a.await;
+        }
+        let _ = hub_task.await;
+        conns.close();
+        let _ = tokio::time::timeout(CLOSE_TIMEOUT * 2, conns.wait()).await;
+        pylog!(LGR, Level::INFO, "Stopped");
+        Ok(())
+    });
+
+    Ok(RunningServer {
+        local_addr,
+        monitor_addr,
+        hub: hub_handle,
+        task,
+    })
+}
+
+/// Accept connections until shutdown; one task per connection (`srv_accept`, server.py:193-241).
+async fn accept_loop(
+    listener: TcpListener,
+    kind: ClientKind,
+    tls: Option<TlsAcceptor>,
+    ctx: ConnCtx,
+    ids: Arc<AtomicU64>,
+    conns: TaskTracker,
+) {
+    let stype = if tls.is_some() { "ssl" } else { "tcp" };
+    let what = match kind {
+        ClientKind::Cot => "cot",
+        ClientKind::Monitor => "mon",
+    };
+    loop {
+        let accepted = tokio::select! {
+            () = ctx.shutdown.wait() => return,
+            r = listener.accept() => r,
+        };
+        match accepted {
+            Ok((sock, addr)) => {
+                pylog!(
+                    LGR,
+                    Level::INFO,
+                    "New {stype} {what} client from {}:{}",
+                    addr.ip(),
+                    addr.port()
+                );
+                let id = ClientId(ids.fetch_add(1, Ordering::Relaxed));
+                conns.spawn(conn::serve(ctx.clone(), id, kind, sock, tls.clone()));
+            }
+            Err(e) => {
+                pylog!(LGR, Level::INFO, "Client connect failed None:None ({e})");
+                // EMFILE and friends: do not spin.
+                tokio::time::sleep(ACCEPT_BACKOFF).await;
+            }
+        }
+    }
 }
