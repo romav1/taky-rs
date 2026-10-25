@@ -5,9 +5,10 @@
 //! * [`hub`] — [`HubCmd`], [`Hub`], [`HubHandle`] (the only caller of `taky_cot::Router`) — S-312;
 //! * [`conn`] — [`ConnOutbox`] (the `taky_cot::Outbox` implementation) and the connection
 //!   task (plain/TLS, ban check via the Hub, backpressure) — S-312;
-//! * [`mgmt`] — [`MgmtRequest`] (NUL-terminated JSON on `{root_dir}/taky-mgmt.sock`);
-//! * [`server`] — [`start`] on ready-made listeners (qa01 request A.3; S-312: CoT + monitor
-//!   accept, mgmt socket S-313), [`Listeners::bind`] (S-314);
+//! * [`mgmt`] — [`MgmtRequest`] (NUL-terminated JSON on `{root_dir}/taky-mgmt.sock`; status /
+//!   kickban answered by the Hub) — S-313;
+//! * [`server`] — [`start`] on ready-made listeners (qa01 request A.3; CoT + monitor accept
+//!   S-312, mgmt `UnixListener` + `log_cot` S-313), [`Listeners::bind`] (S-314);
 //! * [`limits`] — backpressure constants (ARCHITECTURE §6).
 //!
 //! Feature `testkit`: [`HubHandle::settle`] and everything from `taky-cot/testkit`.

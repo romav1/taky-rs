@@ -4,7 +4,6 @@
 //! addresses back (qa01 request A.3); the binary uses [`Listeners::bind`].
 
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -13,7 +12,7 @@ use taky_common::{SharedClock, Shutdown, pylog};
 use taky_config::TakyConfig;
 use taky_cot::{ClientId, ClientKind, Persistence, Router};
 use taky_pki::{CertDb, TlsMode, server_config};
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, UnixListener};
 use tokio::task::JoinHandle;
 use tokio_rustls::TlsAcceptor;
 use tokio_util::task::TaskTracker;
@@ -34,8 +33,9 @@ pub struct Listeners {
     pub cot: TcpListener,
     /// Monitor listener (only with SSL and `mon_ip` set).
     pub monitor: Option<TcpListener>,
-    /// Mgmt unix socket path (`{root_dir}/taky-mgmt.sock`); `None` — no mgmt (tests).
-    pub mgmt_socket: Option<PathBuf>,
+    /// Mgmt unix socket, bound at `{root_dir}/taky-mgmt.sock` (spec §13); `None` — no mgmt.
+    /// The socket file is removed when the server stops.
+    pub mgmt: Option<UnixListener>,
 }
 
 impl Listeners {
@@ -85,7 +85,8 @@ impl RunningServer {
 /// (`Not a boolean: <v>`), a TLS/key/certificate or cert-db error ([`taky_pki::PkiError`]), an
 /// invalid `[taky] redis` URL ([`taky_cot::PersistError`]). An unreachable Redis is not an error.
 ///
-/// The mgmt socket (`listeners.mgmt_socket`) is served from S-313.
+/// `listeners.mgmt` serves the mgmt protocol ([`crate::mgmt`]); with `cot_server.log_cot` set,
+/// every connection writes its CoT log ([`taky_cot::CotLogger`]).
 pub async fn start(opts: ServerOptions, listeners: Listeners) -> anyhow::Result<RunningServer> {
     let cfg = &opts.cfg;
     let (tls, cert_db) = if cfg.ssl.enabled {
@@ -154,6 +155,8 @@ pub async fn start(opts: ServerOptions, listeners: Listeners) -> anyhow::Result<
         hub: hub_handle.clone(),
         clock: opts.clock.clone(),
         shutdown: shutdown.clone(),
+        log_cot: cfg.cot_server.log_cot.clone(),
+        max_persist_ttl: cfg.cot_server.max_persist_ttl,
     };
     let ids = Arc::new(AtomicU64::new(1));
     let conns = TaskTracker::new();
@@ -173,6 +176,20 @@ pub async fn start(opts: ServerOptions, listeners: Listeners) -> anyhow::Result<
             None,
             ctx,
             ids,
+            conns.clone(),
+        )));
+    }
+
+    if let Some(m) = listeners.mgmt {
+        if let Ok(a) = m.local_addr()
+            && let Some(p) = a.as_pathname()
+        {
+            pylog!(LGR, Level::INFO, "Management socket at {}", p.display());
+        }
+        accepts.push(tokio::spawn(crate::mgmt::accept_loop(
+            m,
+            hub_handle.clone(),
+            shutdown.clone(),
             conns.clone(),
         )));
     }

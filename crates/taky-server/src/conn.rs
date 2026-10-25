@@ -18,18 +18,27 @@
 //! bytes; each chunk is fed to the [`CotDecoder`] once and all completed `<event>` elements are
 //! taken; per element `ClientStats::record_rx`, then `Event::from_element` — an
 //! `UnmarshalError` is logged (DEBUG) and the event dropped, the connection stays (spec §6
-//! item 2); otherwise the event goes to the Hub **unmodified** (log_cot is S-313, review-3B N-1/N-2).
+//! item 2); otherwise the event goes to the Hub **unmodified**.
+//!
+//! **CoT log (`log_cot`, S-313, review-3B N-1):** with `log_cot` set, each connection owns a
+//! [`CotLogger`]. After the event is handed to the Hub, the logger gets the original element
+//! and a clone of the event (it applies max_ttl to its own copy, mirrors `handle_atom` for the
+//! file name and skips pings/empty types/`*-ping`); an `UnmarshalError` is logged with
+//! `<__taky_err>`. File I/O runs in `spawn_blocking`, awaited in order (one record at a time
+//! per connection).
 //! A decoder error closes the connection after the events completed before it in the stream
 //! were handed to the Hub (as qa01's `core_vectors` connection emulation).
 
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use bytes::BytesMut;
 use taky_common::{SharedClock, Shutdown, pylog};
 use taky_cot::{
-    ClientHandle, ClientId, ClientKind, ClientStats, CotDecoder, Event, Frame, Outbox, OutboxError,
+    ClientHandle, ClientId, ClientKind, ClientStats, CotDecoder, CotLogger, Event, Frame, Outbox,
+    OutboxError,
 };
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -51,6 +60,8 @@ pub const CLIENT_DISCONNECTED: &str = "Client disconnected";
 pub const XML_SYNTAX_ERROR: &str = "XML Syntax Error";
 /// Reason for a revoked client certificate (`server.py:254`).
 pub const USER_BANNED: &str = "User banned";
+/// Reason for a connection kicked by mgmt `kickban` (`mgmt.py:76`).
+pub const BANNED: &str = "Banned";
 /// Reason for a handshake that did not finish in [`HANDSHAKE_TIMEOUT`] (`server.py:322`).
 pub const HANDSHAKE_TIMED_OUT: &str = "SSL Handshake timeout";
 /// Reason on shutdown (`server.py:331`).
@@ -152,6 +163,10 @@ pub(crate) struct ConnCtx {
     pub hub: HubHandle,
     pub clock: SharedClock,
     pub shutdown: Shutdown,
+    /// `cot_server.log_cot` (absolute; `None` — no CoT log).
+    pub log_cot: Option<PathBuf>,
+    /// `cot_server.max_persist_ttl` (the CoT log records the event as routed).
+    pub max_persist_ttl: i64,
 }
 
 /// Python logger name of a socket client (`SocketTAKClient@ip:port`, `client.py:43`).
@@ -245,8 +260,18 @@ async fn run<S>(
         }
     }
 
+    let mut logger = ctx.log_cot.as_deref().map(|dir| {
+        CotLogger::new(
+            Some(dir),
+            kind,
+            addr.map(|a| a.ip()),
+            ctx.max_persist_ttl,
+            ctx.clock.clone(),
+        )
+        .with_logger_name(lgr)
+    });
     let reason = tokio::select! {
-        r = read_half(&ctx, id, &stats, &mut rd) => r,
+        r = read_half(&ctx, id, &stats, &mut rd, &mut logger) => r,
         r = write_half(&outbox, rx, &mut wr) => r,
         () = outbox.closed.cancelled() => outbox.close_reason().unwrap_or(SHUTTING_DOWN).to_owned(),
         () = ctx.shutdown.wait() => SHUTTING_DOWN.to_owned(),
@@ -258,7 +283,13 @@ async fn run<S>(
 }
 
 /// Read half: returns the disconnect reason.
-async fn read_half<R>(ctx: &ConnCtx, id: ClientId, stats: &ClientStats, rd: &mut R) -> String
+async fn read_half<R>(
+    ctx: &ConnCtx,
+    id: ClientId,
+    stats: &ClientStats,
+    rd: &mut R,
+    logger: &mut Option<CotLogger>,
+) -> String
 where
     R: AsyncRead + Unpin,
 {
@@ -278,6 +309,7 @@ where
                     stats.record_rx(ctx.clock.epoch());
                     match Event::from_element(&elm) {
                         Ok(evt) => {
+                            let copy = logger.is_some().then(|| evt.clone());
                             let cmd = HubCmd::Event {
                                 id,
                                 event: Box::new(evt),
@@ -285,9 +317,16 @@ where
                             if ctx.hub.send(cmd).await.is_err() {
                                 return SHUTTING_DOWN.to_owned();
                             }
+                            if let Some(evt) = copy {
+                                log_with(logger, move |lg| lg.on_event(&elm, &evt)).await;
+                            }
                         }
                         Err(e) => {
                             pylog!("TAKClient", Level::DEBUG, "Unable to parse Event: {}", e.0);
+                            if logger.is_some() {
+                                let exc = format!("UnmarshalError: {}\n", e.0);
+                                log_with(logger, move |lg| lg.on_error(&elm, &exc)).await;
+                            }
                         }
                     }
                 }
@@ -298,6 +337,23 @@ where
                 }
             }
         }
+    }
+}
+
+/// Run one CoT-log step off the async threads. A logger that disabled itself (I/O error) or
+/// panicked is dropped, so later events are not cloned for it.
+async fn log_with(slot: &mut Option<CotLogger>, f: impl FnOnce(&mut CotLogger) + Send + 'static) {
+    let Some(mut lg) = slot.take() else {
+        return;
+    };
+    if let Ok(lg) = tokio::task::spawn_blocking(move || {
+        f(&mut lg);
+        lg
+    })
+    .await
+        && lg.enabled()
+    {
+        *slot = Some(lg);
     }
 }
 

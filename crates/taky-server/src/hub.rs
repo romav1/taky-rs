@@ -17,15 +17,18 @@
 //!   returns.
 
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
+use chrono::{Local, TimeZone};
+use serde_json::{Map, Value, json};
 use taky_common::{SharedClock, Shutdown, pylog};
 use taky_cot::{ClientHandle, ClientId, Event, Outbox, Router};
-use taky_pki::CertDb;
+use taky_pki::{CertDb, CertStatus, PkiError};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Instant, MissedTickBehavior};
 use tracing::Level;
 
-use crate::conn::SHUTTING_DOWN;
+use crate::conn::{BANNED, SHUTTING_DOWN};
 use crate::mgmt::MgmtRequest;
 
 const LGR: &str = "COTServer";
@@ -134,6 +137,8 @@ pub struct Hub {
     router: Router,
     cert_db: Option<CertDb>,
     clock: SharedClock,
+    /// Start time, epoch seconds (`COTServer.started`; mgmt `uptime`).
+    started: f64,
     rx: mpsc::Receiver<HubCmd>,
 }
 
@@ -145,6 +150,7 @@ impl Hub {
             Hub {
                 router,
                 cert_db,
+                started: clock.epoch(),
                 clock,
                 rx,
             },
@@ -152,7 +158,7 @@ impl Hub {
         )
     }
 
-    /// The clock (mgmt `status` uptime / kickban revoke time, S-313).
+    /// The clock (mgmt `status` uptime / kickban revoke time).
     pub fn clock(&self) -> &SharedClock {
         &self.clock
     }
@@ -190,11 +196,7 @@ impl Hub {
             HubCmd::Event { id, event } => self.router.on_event(id, *event).await,
             HubCmd::Disconnected { id } => self.router.client_disconnect(id),
             HubCmd::Mgmt { req, reply } => {
-                // Full mgmt (status/kickban) is S-313; ping needs no Router.
-                let v = match req {
-                    MgmtRequest::Ping => serde_json::json!({"pong": "taky"}),
-                    _ => serde_json::json!({"error": "mgmt is not implemented yet"}),
-                };
+                let v = self.mgmt(req).await;
                 let _ = reply.send(v);
             }
             HubCmd::Tick => {}
@@ -244,9 +246,211 @@ impl Hub {
     }
 }
 
+/// Mgmt requests (spec §13, `mgmt.py:57-113`).
+impl Hub {
+    async fn mgmt(&mut self, req: MgmtRequest) -> Value {
+        match req {
+            MgmtRequest::Ping => json!({"pong": "taky"}),
+            MgmtRequest::Status => self.status(),
+            MgmtRequest::Kickban { user } => self.kickban(user.as_deref()).await,
+            MgmtRequest::Invalid { cmd } => MgmtRequest::invalid_reply(&cmd),
+        }
+    }
+
+    /// `status`: every registered client (regular + monitor) in connection order. Key order as
+    /// Python's dict; `last_rx` is the int `0` until the first event; `group` is `str(Teams)`.
+    fn status(&self) -> Value {
+        let mut clients = Vec::new();
+        for (h, user) in self.router.clients() {
+            let mut m = Map::new();
+            let num_rx = h.stats.num_rx.load(Ordering::Relaxed);
+            let last_rx = if num_rx == 0 {
+                Value::from(0)
+            } else {
+                py_float(h.stats.last_rx.load())
+            };
+            m.insert("last_rx".into(), last_rx);
+            m.insert("num_rx".into(), Value::from(num_rx));
+            m.insert("connected".into(), py_float(h.stats.connected));
+            match user {
+                Some(u) => {
+                    if let Some(a) = h.addr {
+                        m.insert("ip".into(), Value::from(a.ip().to_string()));
+                    }
+                    let group = u.group.map_or_else(|| "None".to_owned(), |g| g.py_str());
+                    let d = &u.device;
+                    for (k, v) in [
+                        ("uid", u.uid.clone()),
+                        ("callsign", u.callsign.clone()),
+                        ("group", Some(group)),
+                        ("battery", u.battery.clone()),
+                        ("device", d.device.clone()),
+                        ("os", d.os.clone()),
+                        ("version", d.version.clone()),
+                        ("platform", d.platform.clone()),
+                    ] {
+                        m.insert(k.into(), v.map_or(Value::Null, Value::from));
+                    }
+                }
+                None => {
+                    m.insert("anonymous".into(), Value::Bool(true));
+                }
+            }
+            clients.push(Value::Object(m));
+        }
+        let mut ret = Map::new();
+        ret.insert("uptime".into(), py_float(self.clock.epoch() - self.started));
+        ret.insert("num_clients".into(), Value::from(clients.len()));
+        ret.insert("clients".into(), Value::Array(clients));
+        Value::Object(ret)
+    }
+
+    /// `kickban`: revoke every not-yet-revoked cert-db record named `user` (time = local
+    /// `now()` from the injected clock, as `revoke_certificate`), then close each connection
+    /// presenting that serial with `"Banned"` and drop it from the Router at once.
+    /// The cert-db is re-read first if the file changed (D-11, V052). File I/O runs in
+    /// `spawn_blocking`. A revoke that fails to write is logged (ERROR) and not reported.
+    async fn kickban(&mut self, user: Option<&str>) -> Value {
+        let mut revoked: Vec<Value> = Vec::new();
+        let (Some(user), Some(db)) = (user, self.cert_db.take()) else {
+            return json!({ "revoked_sns": revoked });
+        };
+        let path = db.path().to_owned();
+        let when = Local.from_utc_datetime(&self.clock.utc_now()).naive_local();
+        let name = user.to_owned();
+        let job = tokio::task::spawn_blocking(move || {
+            let mut db = db;
+            let refresh_err = db.refresh();
+            let serials: Vec<Vec<u8>> = db
+                .by_name(&name)
+                .filter(|r| r.status != CertStatus::Revoked)
+                .map(|r| r.serial.clone())
+                .collect();
+            let results: Vec<(Vec<u8>, Result<(), PkiError>)> = serials
+                .into_iter()
+                .map(|sn| {
+                    let r = db.revoke(&sn, when);
+                    (sn, r)
+                })
+                .collect();
+            (db, refresh_err, results)
+        })
+        .await;
+        let (db, refresh_err, results) = match job {
+            Ok(x) => x,
+            Err(e) => {
+                pylog!(LGR, Level::ERROR, "kickban failed: {e}");
+                self.cert_db = CertDb::open(&path).ok();
+                return json!({ "revoked_sns": revoked });
+            }
+        };
+        self.cert_db = Some(db);
+        if let Some(e) = refresh_err {
+            pylog!(LGR, Level::WARN, "Unable to re-read cert-db: {e}");
+        }
+        for (sn, res) in results {
+            if let Err(e) = res {
+                pylog!(
+                    "MgmtClient",
+                    Level::ERROR,
+                    "Unable to revoke certificate for {user} (SN: {}): {e}",
+                    hex40(&sn)
+                );
+                continue;
+            }
+            pylog!(
+                "MgmtClient",
+                Level::INFO,
+                "Revoked certificate for {user} (SN: {})",
+                hex40(&sn)
+            );
+            revoked.push(big_int(&sn));
+            let victims: Vec<(ClientId, Arc<dyn Outbox>)> = self
+                .router
+                .clients()
+                .filter(|(h, _)| {
+                    h.peer_serial
+                        .as_deref()
+                        .is_some_and(|p| strip_zeros(p) == strip_zeros(&sn))
+                })
+                .map(|(h, _)| (h.id, h.outbox.clone()))
+                .collect();
+            for (id, outbox) in victims {
+                pylog!("MgmtClient", Level::INFO, "Kicking user {user} from server");
+                outbox.close(BANNED);
+                self.router.client_disconnect(id);
+            }
+        }
+        json!({ "revoked_sns": revoked })
+    }
+}
+
+/// A float as Python prints it (`5.0`, not `5`).
+fn py_float(f: f64) -> Value {
+    serde_json::Number::from_f64(f).map_or(Value::Null, Value::Number)
+}
+
+fn strip_zeros(b: &[u8]) -> &[u8] {
+    let i = b.iter().position(|&x| x != 0).unwrap_or(b.len());
+    &b[i..]
+}
+
+/// `f"{sn:040x}"`.
+fn hex40(sn: &[u8]) -> String {
+    let h: String = strip_zeros(sn).iter().map(|x| format!("{x:02x}")).collect();
+    let h = h.trim_start_matches('0');
+    format!("{h:0>40}")
+}
+
+/// A big-endian unsigned integer as a JSON integer of any size (`arbitrary_precision`).
+fn big_int(sn: &[u8]) -> Value {
+    // Repeated division by 10 of the big-endian byte string.
+    let mut digits = Vec::new();
+    let mut n: Vec<u8> = strip_zeros(sn).to_vec();
+    while !n.is_empty() {
+        let mut rem = 0u32;
+        let mut q = Vec::with_capacity(n.len());
+        for &b in &n {
+            let cur = (rem << 8) | u32::from(b);
+            let d = cur / 10;
+            rem = cur % 10;
+            if !(q.is_empty() && d == 0) {
+                q.push(u8::try_from(d).unwrap_or(0));
+            }
+        }
+        digits.push(b'0' + u8::try_from(rem).unwrap_or(0));
+        n = q;
+    }
+    if digits.is_empty() {
+        digits.push(b'0');
+    }
+    digits.reverse();
+    let text = String::from_utf8(digits).unwrap_or_else(|_| "0".into());
+    serde_json::from_str::<serde_json::Number>(&text).map_or(Value::Null, Value::Number)
+}
+
 fn hex_upper(b: &[u8]) -> String {
     if b.is_empty() {
         return "00".to_owned();
     }
     b.iter().map(|x| format!("{x:02X}")).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn big_int_and_hex() {
+        assert_eq!(big_int(&[]).to_string(), "0");
+        assert_eq!(big_int(&[0, 1, 0]).to_string(), "256");
+        assert_eq!(big_int(&[0x8f, 0x03, 0x42]).to_string(), "9372482");
+        let max = [0x7fu8; 20];
+        assert_eq!(
+            big_int(&max).to_string(),
+            "727885129180488904360266563744972327436484050815"
+        );
+        assert_eq!(hex40(&[0x8f, 0x03, 0x42]), format!("{:0>40}", "8f0342"));
+        assert_eq!(hex40(&[0x00, 0x0a]), format!("{:0>40}", "a"));
+    }
 }

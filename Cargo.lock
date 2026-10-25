@@ -2440,6 +2440,7 @@ dependencies = [
  "taky-common",
  "taky-config",
  "taky-xml",
+ "tempfile",
  "thiserror",
  "tokio",
  "tokio-util",

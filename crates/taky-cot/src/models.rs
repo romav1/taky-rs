@@ -592,6 +592,14 @@ impl Teams {
         Teams::Brown,
     ];
 
+    /// Python `str(Teams.X)`, e.g. `"Teams.CYAN"`, `"Teams.DARK_BLUE"` (mgmt `status`).
+    pub fn py_str(self) -> String {
+        format!(
+            "Teams.{}",
+            self.as_str().to_ascii_uppercase().replace(' ', "_")
+        )
+    }
+
     /// Wire name (`Teams.value`).
     pub fn as_str(self) -> &'static str {
         match self {
@@ -783,6 +791,12 @@ impl Event {
     /// D-8: an event without `version`, `uid`, `type` or `how` cannot be serialized (Python's
     /// `elm.set(k, None)` raises `TypeError`): it is delivered to no one and not persisted.
     pub fn to_frame(&self) -> Result<Frame, SerializeError> {
+        Ok(taky_xml::serialize(&self.to_wire_element()?, &SerOpts::default()).into())
+    }
+
+    /// [`Event::to_element`] with the D-8 check of [`Event::to_frame`]: what Python's
+    /// `evt.as_element` produces, or the error it raises (also used by the CoT log, S-313).
+    pub fn to_wire_element(&self) -> Result<Element, SerializeError> {
         for (k, v) in [
             ("version", &self.version),
             ("uid", &self.uid),
@@ -793,7 +807,7 @@ impl Event {
                 return Err(SerializeError(format!("event has no '{k}' attribute")));
             }
         }
-        Ok(taky_xml::serialize(&self.to_element()?, &SerOpts::default()).into())
+        self.to_element()
     }
 
     /// `Event.persist_ttl`: `round((stale - utcnow()).total_seconds())` (half-even),

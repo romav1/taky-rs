@@ -25,6 +25,7 @@ tokio.workspace = true
 tokio-util.workspace = true
 tokio-rustls.workspace = true
 bytes.workspace = true
+chrono.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 clap.workspace = true
@@ -35,7 +36,6 @@ tracing.workspace = true
 [dev-dependencies]
 assert_cmd.workspace = true
 taky-common = { workspace = true, features = ["testkit"] }
-chrono.workspace = true
 rcgen.workspace = true
 rustls.workspace = true
 tempfile.workspace = true
