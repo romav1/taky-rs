@@ -8,14 +8,17 @@
 //! * [`persist`] — [`Persistence`] (enum: memory | Redis);
 //! * [`decoder`] — [`CotDecoder`] (`tokio_util::codec::Decoder`, stream → `<event>` elements);
 //! * [`models`] — [`Event`] and friends, [`Frame`];
+//! * [`isoparse`] — `dateutil.parser.isoparse` port (U001);
 //! * [`cotlog`] — [`CotLogger`] (`log_cot`);
 //! * [`testkit`] (feature `testkit`) — [`testkit::TestOutbox`] and test-only Router hooks.
 //!
-//! Status: S-202 seams (types and signatures; bodies `todo!()`). Implementation — S-303..S-309.
+//! Status: models + decoder implemented (S-306; field-built TakUser/GeoChat `to_element` —
+//! S-307); Router, Persistence, CoT log — S-308..S-309.
 
 pub mod client;
 pub mod cotlog;
 pub mod decoder;
+pub mod isoparse;
 pub mod limits;
 pub mod models;
 pub mod persist;

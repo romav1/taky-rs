@@ -4,6 +4,7 @@
 //! * [`log`] — logging in Python `logging.basicConfig()` format (ARCHITECTURE §8);
 //! * [`pyjson`] — `json.dumps`-compatible output (mgmt, DPS meta);
 //! * [`pyfmt`] — number and date formatting as in Python (`%.6f`, `round`, `isoformat`);
+//! * [`pyparse`] — `float()` and the `Nd`/whitespace classes of CPython `int()`/`float()`;
 //! * [`clock`] — injectable clock [`clock::Clock`] (qa01 requirement, test-strategy §4.6);
 //! * [`shutdown`] — shutdown signal [`shutdown::Shutdown`];
 //! * `vectors` (feature `testkit`) — location of the an01 test vectors for tests.
@@ -14,6 +15,7 @@ pub mod clock;
 pub mod log;
 pub mod pyfmt;
 pub mod pyjson;
+pub mod pyparse;
 pub mod shutdown;
 #[cfg(feature = "testkit")]
 pub mod vectors;

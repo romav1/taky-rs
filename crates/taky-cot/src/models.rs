@@ -1,14 +1,22 @@
 //! CoT models (`taky/cot/models/*.py`): [`Event`], [`Point`], [`Detail`], [`TakUser`],
 //! [`TakDevice`], [`GeoChat`], [`Teams`] and the wire [`Frame`].
 //!
-//! Field sets follow the original; types may be refined in S-303 (by inbox agreement if a
-//! public field changes). All time values are naive UTC, as in the original (`tzinfo=None`).
+//! Field sets follow the original. All time values are naive UTC, as in the original
+//! (`tzinfo=None`): dates are parsed by [`crate::isoparse::isoparse`] (offset dropped, U001),
+//! floats by [`taky_common::pyparse::py_float`] and printed with `%.6f`/`%.1f` (U002).
+//!
+//! S-306: [`Event`], [`Point`], [`Detail`], the parsing side of [`TakUser`]/[`GeoChat`] (needed by
+//! the `<detail>` dispatch). S-307: `to_element` of field-built `TakUser`/`GeoChat`.
 
 use std::sync::Arc;
 
 use chrono::NaiveDateTime;
 use taky_common::Clock;
-use taky_xml::Element;
+use taky_common::pyfmt::{fmt_f1, fmt_f6, isoformat_ms, round_half_even};
+use taky_common::pyparse::py_float;
+use taky_xml::{Element, SerOpts};
+
+use crate::isoparse::isoparse;
 
 /// An event serialized **once** (`etree.tostring(event.as_element)`), shared by all
 /// recipients: fan-out clones the `Arc`, not the bytes. The same bytes are stored in Redis.
@@ -41,6 +49,36 @@ pub struct Point {
     pub le: f64,
 }
 
+impl Point {
+    /// `Point.from_elm`: all five attributes through Python `float()`; a missing or invalid one
+    /// is an error (the caller turns it into `Issue parsing point`).
+    pub fn from_element(e: &Element) -> Result<Point, UnmarshalError> {
+        let f = |k: &str| {
+            e.get(k)
+                .and_then(py_float)
+                .ok_or_else(|| UnmarshalError(format!("Invalid point attribute '{k}'")))
+        };
+        Ok(Point {
+            lat: f("lat")?,
+            lon: f("lon")?,
+            hae: f("hae")?,
+            ce: f("ce")?,
+            le: f("le")?,
+        })
+    }
+
+    /// `Point.as_element`: `lat lon` as `%.6f`, `hae ce le` as `%.1f`, in that order.
+    pub fn to_element(&self) -> Element {
+        let mut e = Element::new("point");
+        e.set("lat", fmt_f6(self.lat));
+        e.set("lon", fmt_f6(self.lon));
+        e.set("hae", fmt_f1(self.hae));
+        e.set("ce", fmt_f1(self.ce));
+        e.set("le", fmt_f1(self.le));
+        e
+    }
+}
+
 impl Default for Point {
     fn default() -> Self {
         Point {
@@ -61,14 +99,75 @@ pub struct Detail {
 }
 
 impl Detail {
-    /// `Detail.has_marti`: the detail contains `marti/dest[@callsign]`.
-    pub fn has_marti(&self) -> bool {
-        todo!("S-303")
+    /// `Detail.from_elm`.
+    pub fn from_element(elm: &Element) -> Result<Detail, UnmarshalError> {
+        if elm.tag != "detail" {
+            return Err(UnmarshalError(format!(
+                "Cannot create Detail from {}",
+                elm.tag
+            )));
+        }
+        Ok(Detail { elm: elm.clone() })
     }
 
-    /// `Detail.marti_cs`: callsigns from `marti/dest/@callsign`, in document order.
-    pub fn marti_cs(&self) -> Vec<String> {
-        todo!("S-303")
+    /// `Detail.has_marti`: the **first** direct `<marti>` child has at least one direct `<dest>`
+    /// child (any attributes) — spec §7.2, V021.
+    pub fn has_marti(&self) -> bool {
+        has_marti(Some(&self.elm))
+    }
+
+    /// `Detail.marti_cs`: `callsign` of every `<dest>` of the first `<marti>`, in document order;
+    /// `None` for a `<dest>` without `callsign` (Python yields `None`, the Router matches on it).
+    pub fn marti_cs(&self) -> Vec<Option<String>> {
+        marti_cs(Some(&self.elm))
+    }
+}
+
+fn marti_cs(elm: Option<&Element>) -> Vec<Option<String>> {
+    elm.and_then(|e| e.find("marti"))
+        .map(|m| {
+            m.child_elements()
+                .filter(|d| d.tag == "dest")
+                .map(|d| d.get("callsign").map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn has_marti(elm: Option<&Element>) -> bool {
+    elm.and_then(|e| e.find("marti"))
+        .is_some_and(|m| m.child_elements().any(|d| d.tag == "dest"))
+}
+
+/// `TAKUser.is_type`: the direct child tags include `takv`, `contact` and `__group`.
+fn is_takuser(tags: &[&str]) -> bool {
+    ["takv", "contact", "__group"]
+        .iter()
+        .all(|t| tags.contains(t))
+}
+
+/// `GeoChat.is_type`: the direct child tags include `__chat`, `remarks` and `link`.
+fn is_geochat(tags: &[&str]) -> bool {
+    ["__chat", "remarks", "link"]
+        .iter()
+        .all(|t| tags.contains(t))
+}
+
+/// Python `TypeError`/`ValueError` while parsing a child of `<event>`.
+fn child_err(tag: &str) -> UnmarshalError {
+    UnmarshalError(format!("Issue parsing {tag}"))
+}
+
+impl TakDevice {
+    /// `TAKDevice.from_elm` (attributes as is).
+    pub fn from_element(takv: &Element) -> TakDevice {
+        let a = |k: &str| takv.get(k).map(str::to_string);
+        TakDevice {
+            os: a("os"),
+            version: a("version"),
+            device: a("device"),
+            platform: a("platform"),
+        }
     }
 }
 
@@ -106,10 +205,10 @@ pub struct TakUser {
     pub xmpp: Option<String>,
     /// `contact/@endpoint`.
     pub endpoint: Option<String>,
-    /// `track/@course` (raw attribute text).
-    pub course: Option<String>,
-    /// `track/@speed` (raw attribute text).
-    pub speed: Option<String>,
+    /// `track/@course` (Python `float()`).
+    pub course: Option<f64>,
+    /// `track/@speed` (Python `float()`).
+    pub speed: Option<f64>,
     /// `status/@battery` (raw attribute text).
     pub battery: Option<String>,
     /// `takv`.
@@ -117,16 +216,66 @@ pub struct TakUser {
 }
 
 impl TakUser {
-    /// `TAKUser.from_elm(elm, uid)`.
+    /// `TAKUser.from_elm(elm, uid)`: children in document order, the last one of a tag wins.
+    /// `contact/@xmppUsername` is **not** read (as in the original: `xmpp` stays `None`);
+    /// an unknown or missing `__group/@name` is `Teams.UNKNOWN` = Cyan; a missing or invalid
+    /// `track/@course|@speed` is an error (`float()` raises; the caller reports `Issue parsing detail`).
     pub fn from_element(detail: &Element, uid: Option<&str>) -> Result<TakUser, UnmarshalError> {
-        let _ = (detail, uid);
-        todo!("S-303")
+        let mut u = TakUser {
+            elm: Some(detail.clone()),
+            uid: uid.map(str::to_string),
+            ..TakUser::default()
+        };
+        let a = |e: &Element, k: &str| e.get(k).map(str::to_string);
+        for d in detail.child_elements() {
+            match d.tag.as_str() {
+                "takv" => u.device = TakDevice::from_element(d),
+                "contact" => {
+                    u.callsign = a(d, "callsign");
+                    u.phone = a(d, "phone");
+                    u.endpoint = a(d, "endpoint");
+                }
+                "__group" => {
+                    u.group = Some(
+                        d.get("name")
+                            .and_then(Teams::from_name)
+                            .unwrap_or(Teams::Cyan),
+                    );
+                    u.role = a(d, "role");
+                }
+                "status" => u.battery = a(d, "battery"),
+                "track" => {
+                    let f = |k: &str| {
+                        d.get(k)
+                            .and_then(py_float)
+                            .ok_or_else(|| UnmarshalError(format!("Invalid track/@{k}")))
+                    };
+                    u.course = Some(f("course")?);
+                    u.speed = Some(f("speed")?);
+                }
+                _ => {}
+            }
+        }
+        Ok(u)
     }
 
-    /// `TAKUser.as_element` — also for objects built from fields
-    /// (`test_takuser.test_as_element`, qa01 testkit request A.4).
+    /// `TAKUser.as_element` — the original `<detail>` when there is one; objects built from
+    /// fields (`test_takuser.test_as_element`, qa01 testkit request A.4) — S-307.
     pub fn to_element(&self) -> Element {
-        todo!("S-303")
+        match &self.elm {
+            Some(e) => e.clone(),
+            None => todo!("S-307: TAKUser.as_element from fields"),
+        }
+    }
+
+    /// `has_marti` inherited from `Detail` (`False` without an element).
+    pub fn has_marti(&self) -> bool {
+        has_marti(self.elm.as_ref())
+    }
+
+    /// `marti_cs` inherited from `Detail`.
+    pub fn marti_cs(&self) -> Vec<Option<String>> {
+        marti_cs(self.elm.as_ref())
     }
 }
 
@@ -163,21 +312,87 @@ impl GeoChat {
         self.chatroom.as_deref() == Some(ALL_CHAT_ROOMS)
     }
 
-    /// `GeoChat.from_elm`.
+    /// `GeoChat.from_elm`. Missing `__chat`, `__chat/chatgrp`, `remarks` or `link` is the
+    /// error `Detail does not contain GeoChat` (an `UnmarshalError`, not re-wrapped by the
+    /// caller); an unknown team name with `parent="TeamGroups"` or a bad/missing `remarks/@time`
+    /// is a Python `ValueError`/`TypeError`, reported by the caller as `Issue parsing detail`
+    /// (see [`GeoChat::from_element_inner`]).
     pub fn from_element(detail: &Element) -> Result<GeoChat, UnmarshalError> {
-        let _ = detail;
-        todo!("S-303")
+        match GeoChat::from_element_inner(detail)? {
+            Ok(g) => Ok(g),
+            Err(()) => Err(child_err("detail")),
+        }
     }
 
-    /// `GeoChat.as_element` — also for objects built from fields
-    /// (`test_router.test_geochat`, qa01 testkit request A.4).
+    /// Outer error: `UnmarshalError` raised by `from_elm` itself; inner `Err(())`: a Python
+    /// `ValueError`/`TypeError`.
+    fn from_element_inner(detail: &Element) -> Result<Result<GeoChat, ()>, UnmarshalError> {
+        if detail.tag != "detail" {
+            return Err(UnmarshalError(format!(
+                "Cannot create GeoChat from {}",
+                detail.tag
+            )));
+        }
+        let chat = detail.find("__chat");
+        let chatgrp = chat.and_then(|c| c.find("chatgrp"));
+        let remarks = detail.find("remarks");
+        let link = detail.find("link");
+        let (Some(chat), Some(_), Some(remarks), Some(link)) = (chat, chatgrp, remarks, link)
+        else {
+            return Err(UnmarshalError("Detail does not contain GeoChat".into()));
+        };
+        let a = |e: &Element, k: &str| e.get(k).map(str::to_string);
+        let mut g = GeoChat {
+            elm: Some(detail.clone()),
+            chat_parent: a(chat, "parent"),
+            group_owner: chat.get("groupOwner") == Some("true"),
+            src_uid: a(link, "uid"),
+            src_cs: a(chat, "senderCallsign"),
+            src_marker: a(link, "type"),
+            chatroom: a(chat, "chatroom"),
+            ..GeoChat::default()
+        };
+        if g.chat_parent.as_deref() == Some(CHAT_PARENT_TEAM) {
+            match g.chatroom.as_deref().and_then(Teams::from_name) {
+                Some(t) => g.dst_team = Some(t),
+                None => return Ok(Err(())),
+            }
+        } else if g.chatroom.as_deref() != Some(ALL_CHAT_ROOMS) {
+            g.dst_uid = a(chat, "id");
+        }
+        g.message = remarks.text.clone();
+        match remarks.get("time").and_then(isoparse) {
+            Some(t) => g.message_ts = Some(t),
+            None => return Ok(Err(())),
+        }
+        Ok(Ok(g))
+    }
+
+    /// `GeoChat.as_element` — the original `<detail>` when there is one; objects built from
+    /// fields (`test_router.test_geochat`, qa01 testkit request A.4) — S-307.
     pub fn to_element(&self) -> Element {
-        todo!("S-303")
+        match &self.elm {
+            Some(e) => e.clone(),
+            None => todo!("S-307: GeoChat.as_element from fields"),
+        }
+    }
+
+    /// `has_marti` inherited from `Detail` (`False` without an element).
+    pub fn has_marti(&self) -> bool {
+        has_marti(self.elm.as_ref())
+    }
+
+    /// `marti_cs` inherited from `Detail`.
+    pub fn marti_cs(&self) -> Vec<Option<String>> {
+        marti_cs(self.elm.as_ref())
     }
 }
 
 /// The GeoChat broadcast room name (`geochat.py:ALL_CHAT_ROOMS`).
 pub const ALL_CHAT_ROOMS: &str = "All Chat Rooms";
+
+/// `ChatParents.TEAM` (`geochat.py`).
+pub const CHAT_PARENT_TEAM: &str = "TeamGroups";
 
 /// ATAK team colors (`models/teams.py:Teams`); the value is the `__group/@name` text.
 /// `Teams.UNKNOWN` is a Python enum alias of `Cyan` and therefore has no variant here.
@@ -245,7 +460,7 @@ impl Teams {
     }
 }
 
-/// The parsed `<detail>`: which model `Detail.from_elm` picked.
+/// The parsed `<detail>`: which model `Event.from_elm` picked (TAKUser before GeoChat).
 #[derive(Debug, Clone, PartialEq)]
 pub enum EventDetail {
     /// GeoChat (`b-t-f` + `__chat`).
@@ -254,6 +469,49 @@ pub enum EventDetail {
     TakUser(TakUser),
     /// Anything else.
     Plain(Detail),
+}
+
+impl EventDetail {
+    /// `detail.has_marti` (every model inherits it from `Detail`).
+    pub fn has_marti(&self) -> bool {
+        match self {
+            EventDetail::GeoChat(g) => g.has_marti(),
+            EventDetail::TakUser(u) => u.has_marti(),
+            EventDetail::Plain(d) => d.has_marti(),
+        }
+    }
+
+    /// `detail.marti_cs`.
+    pub fn marti_cs(&self) -> Vec<Option<String>> {
+        match self {
+            EventDetail::GeoChat(g) => g.marti_cs(),
+            EventDetail::TakUser(u) => u.marti_cs(),
+            EventDetail::Plain(d) => d.marti_cs(),
+        }
+    }
+
+    /// `detail.as_element` (the original element for parsed details).
+    pub fn to_element(&self) -> Element {
+        match self {
+            EventDetail::GeoChat(g) => g.to_element(),
+            EventDetail::TakUser(u) => u.to_element(),
+            EventDetail::Plain(d) => d.elm.clone(),
+        }
+    }
+
+    /// `Event.from_elm` detail dispatch by the set of direct child tags (`event.py:79-85`).
+    fn from_element(detail: &Element, uid: Option<&str>) -> Result<EventDetail, UnmarshalError> {
+        let tags: Vec<&str> = detail.child_elements().map(|c| c.tag.as_str()).collect();
+        if is_takuser(&tags) {
+            TakUser::from_element(detail, uid)
+                .map(EventDetail::TakUser)
+                .map_err(|_| child_err("detail"))
+        } else if is_geochat(&tags) {
+            GeoChat::from_element(detail).map(EventDetail::GeoChat)
+        } else {
+            Detail::from_element(detail).map(EventDetail::Plain)
+        }
+    }
 }
 
 /// `<event>` (`models/event.py`).
@@ -280,27 +538,113 @@ pub struct Event {
 }
 
 impl Event {
-    /// `Event.from_elm` (dates via `isoparse`, `point`, `detail` dispatch).
+    /// `Event.from_elm` (`event.py:47-92`), in the original order of checks:
+    /// tag `event` → `time`/`start`/`stale` via `isoparse` (`Date parsing error`) → `uid` →
+    /// `type` → children: `point` and `detail`, the **last** of each wins, others are ignored.
+    /// No `<point>` ⇒ [`Point::default`] (V010). `version`/`how` are optional (D-8).
     pub fn from_element(e: &Element) -> Result<Event, UnmarshalError> {
-        let _ = e;
-        todo!("S-303")
+        if e.tag != "event" {
+            return Err(UnmarshalError(format!(
+                "Cannot create Event from {}",
+                e.tag
+            )));
+        }
+        let date = |k: &str| {
+            e.get(k)
+                .and_then(isoparse)
+                .ok_or_else(|| UnmarshalError("Date parsing error".into()))
+        };
+        let (time, start, stale) = (date("time")?, date("start")?, date("stale")?);
+        let a = |k: &str| e.get(k).map(str::to_string);
+        let mut evt = Event {
+            version: a("version"),
+            uid: a("uid"),
+            etype: a("type"),
+            how: a("how"),
+            time,
+            start,
+            stale,
+            point: Point::default(),
+            detail: None,
+        };
+        if evt.uid.is_none() {
+            return Err(UnmarshalError("Event must have 'uid' attribute".into()));
+        }
+        if evt.etype.is_none() {
+            return Err(UnmarshalError("Event must have 'type' attribute".into()));
+        }
+        for child in e.child_elements() {
+            match child.tag.as_str() {
+                "point" => {
+                    evt.point = Point::from_element(child).map_err(|_| child_err("point"))?;
+                }
+                "detail" => {
+                    evt.detail = Some(EventDetail::from_element(child, evt.uid.as_deref())?);
+                }
+                _ => {}
+            }
+        }
+        Ok(evt)
     }
 
-    /// `Event.as_element`.
+    /// `Event.as_element`: attributes `version uid type how time start stale` (absent ones are
+    /// omitted — Python raises there, see [`Event::to_frame`]), `<point>`, then the detail.
+    ///
+    /// The parsed `<detail>` is appended as lxml moves it into the new tree: its namespace
+    /// declarations are reconciled ([`Element::reconcile_moved_ns`]) and its **tail is kept**
+    /// (`<detail>…</detail>\n</event>` is real output).
     pub fn to_element(&self) -> Element {
-        todo!("S-303")
+        let mut e = Element::new("event");
+        for (k, v) in [
+            ("version", &self.version),
+            ("uid", &self.uid),
+            ("type", &self.etype),
+            ("how", &self.how),
+        ] {
+            if let Some(v) = v {
+                e.set(k, v.as_str());
+            }
+        }
+        e.set("time", format!("{}Z", isoformat_ms(self.time)));
+        e.set("start", format!("{}Z", isoformat_ms(self.start)));
+        e.set("stale", format!("{}Z", isoformat_ms(self.stale)));
+        e.append(self.point.to_element());
+        if let Some(d) = &self.detail {
+            let mut d = d.to_element();
+            d.reconcile_moved_ns();
+            e.append(d);
+        }
+        e
     }
 
     /// `etree.tostring(self.as_element)` as a shared [`Frame`].
+    ///
+    /// D-8: an event without `version`, `uid`, `type` or `how` cannot be serialized (Python's
+    /// `elm.set(k, None)` raises `TypeError`): it is delivered to no one and not persisted.
     pub fn to_frame(&self) -> Result<Frame, SerializeError> {
-        todo!("S-303")
+        for (k, v) in [
+            ("version", &self.version),
+            ("uid", &self.uid),
+            ("type", &self.etype),
+            ("how", &self.how),
+        ] {
+            if v.is_none() {
+                return Err(SerializeError(format!("event has no '{k}' attribute")));
+            }
+        }
+        Ok(taky_xml::serialize(&self.to_element(), &SerOpts::default()).into())
     }
 
     /// `Event.persist_ttl`: `round((stale - utcnow()).total_seconds())` (half-even),
-    /// with "now" taken from the injected clock.
+    /// with "now" taken from the injected clock (truncated to microseconds, like `utcnow()`).
     pub fn persist_ttl(&self, clock: &dyn Clock) -> i64 {
-        let _ = clock;
-        todo!("S-303")
+        let us = |t: NaiveDateTime| {
+            let t = t.and_utc();
+            i128::from(t.timestamp()) * 1_000_000 + i128::from(t.timestamp_subsec_micros())
+        };
+        let delta = us(self.stale) - us(clock.utc_now());
+        // timedelta.total_seconds() = microseconds / 10**6 (one correctly rounded division).
+        round_half_even(delta as f64 / 1e6)
     }
 }
 
