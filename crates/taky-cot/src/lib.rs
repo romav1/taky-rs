@@ -12,8 +12,8 @@
 //! * [`cotlog`] — [`CotLogger`] (`log_cot`);
 //! * [`testkit`] (feature `testkit`) — [`testkit::TestOutbox`] and test-only Router hooks.
 //!
-//! Status: models + decoder implemented (S-306; field-built TakUser/GeoChat `to_element` —
-//! S-307); Router, Persistence, CoT log — S-308..S-309.
+//! Status: models + decoder (S-306/S-307), Router + memory persistence (S-308) implemented;
+//! Redis persistence, `Persistence::from_config`, CoT log — S-309.
 
 pub mod client;
 pub mod cotlog;
