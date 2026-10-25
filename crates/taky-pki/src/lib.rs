@@ -2,11 +2,14 @@
 //! CA/certificate and PKCS#12 generation (ARCHITECTURE §1, §11, §14, ADR-003, ADR-006).
 //!
 //! Status: S-311 implemented `pem` (certificate/key loading), `tls`, `identity`, `certdb` (D-11).
-//! Still to come — dev02, S-320, S-321. Certificate/PKCS#12 generation (`make_ca`,
-//! `make_cert`, `pkcs12::write`) is internal to dev02 (takyctl) and not a seam; dev02 adds it behind the `gen` feature
-//! (enabled only by takyctl, so `rsa` is not linked into taky-rs / taky_dps-rs).
+//! S-320: `certgen` (CA/server/client certificate generation, anc.py profiles). Still to come —
+//! S-321 `pkcs12::write`. Generation is internal to dev02 (takyctl), not a seam, and lives
+//! behind the `gen` feature (enabled only by takyctl, so `rsa` is not linked into taky-rs /
+//! taky_dps-rs).
 
 pub mod certdb;
+#[cfg(feature = "gen")]
+pub mod certgen;
 pub mod error;
 pub mod identity;
 pub mod pem;
