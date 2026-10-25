@@ -9,13 +9,15 @@ Live differences from an01's Flask-test-client runner (by design, this is the re
   * remote_addr -> the request is sent from a local non-loopback source address (any; the exact value
     in the vector is not reproducible). Without such an address the step is reported as SKIP.
 Normalisation (same as an01): SubmissionDateTime -> $TIMESTAMP, taky-unknown -> taky-$VERSION,
-absolute upload_path -> $UPLOAD_PATH.
+absolute upload_path -> $UPLOAD_PATH. Rust (S-319): taky-rs-<semver> -> taky-$VERSION (G-3, version string
+is taky-rs-x.y.z by design); SubmissionDateTime is masked, so no frozen-clock hook is needed for DPS.
 """
 import base64
 import http.client
 import io
 import json
 import os
+import re
 import ssl
 import urllib.parse
 
@@ -23,6 +25,12 @@ from . import bench
 from .targets import local_non_loopback_ip
 
 import run_python_dps as rpd  # an01: norm_json, norm_text, snapshot_files
+
+VERSION_RE = re.compile(r"taky-(?:unknown|rs-\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)")
+
+
+def norm_version(s):
+    return VERSION_RE.sub("taky-$VERSION", s)
 
 
 class DpsRun:
@@ -115,12 +123,12 @@ class DpsRun:
             except UnicodeDecodeError:
                 obs["body_b64"] = base64.b64encode(data).decode()
         if "body" in obs:
-            obs["body"] = obs["body"].replace("taky-unknown", "taky-$VERSION").replace(self.up, "$UPLOAD_PATH")
+            obs["body"] = norm_version(obs["body"]).replace(self.up, "$UPLOAD_PATH")
             if resp.status >= 400 and obs["body"].lower().startswith("<!doctype html>"):
                 del obs["body"]
                 obs["body_is_framework_page"] = True
         if "body_json" in obs:
-            obs["body_json"] = json.loads(json.dumps(obs["body_json"]).replace("taky-unknown", "taky-$VERSION"))
+            obs["body_json"] = json.loads(norm_version(json.dumps(obs["body_json"])))
         names = sorted(set(step.get("expect", {}).get("headers", {})) | set(step.get("record_headers", [])))
         if names:
             obs["headers"] = {h: resp.getheader(h) for h in names}

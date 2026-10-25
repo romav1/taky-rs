@@ -3,7 +3,7 @@ Targets = the servers under test. A target knows how to start/stop its processes
 offers the test hooks; everything on the wire is driven by cot.py / dps.py, identically for all targets.
 
   py  — the ORIGINAL Python taky 0.9 (read-only ../taky, venv from tools/pyref), bind_ip 127.0.0.2
-  rs  — taky-rs / taky_dps-rs, bind_ip 127.0.0.3 — STUB until the servers exist (T-20..T-25)
+  rs  — taky-rs / taky_dps-rs, bind_ip 127.0.0.3 — DPS wired (S-319); CoT/unit N/A until T-30
 
 Instance contract (CoT):  start(conf, vec, ctl_dir) / stop() / alive() / crash_reason()
                           advance(seconds) / persist_hook() -> {"backend": "memory", "uids": [...]} | {"backend": "redis"}
@@ -146,14 +146,37 @@ class PyTarget:
         return json.loads(out.stdout)
 
 
-class RsTarget:
-    """Rust target (taky-rs, taky_dps-rs) — reserved bind_ip 127.0.0.3. Not implemented yet.
+class RsDps:
+    """taky_dps-rs as a live process (same taky.conf/cert layout as PyDps; bind_ip 127.0.0.3).
 
-    Needed from the Rust side before this can run (see qa01/handoff/T-11.md):
-      * binaries taky-rs / taky_dps-rs reading the same taky.conf (bind_ip, root_dir, ports, ssl.*, log_cot, redis);
-      * testkit hooks equivalent to pylaunch_cot.py: frozen start time from the vector "now", `advance`,
-        persist snapshot (Router::persist_snapshot), ready marker, crash marker / exit code;
-      * a unit adapter binary with the pyunit.py JSON contract.
+    No testkit hooks: SubmissionDateTime is masked ($TIMESTAMP, dps.observe), like the Python side."""
+
+    def __init__(self, target, workdir):
+        self.t, self.workdir = target, workdir
+        self.proc = None
+
+    def start(self, conf, ssl_on):
+        self.port = bench.DPS_TLS_PORT if ssl_on else bench.DPS_TCP_PORT
+        if bench.port_busy(self.t.ip, self.port):
+            raise RuntimeError(f"{self.t.ip}:{self.port} is busy")
+        log = open(os.path.join(self.workdir, "server.log"), "wb")
+        env = dict(os.environ, TAKY_CONFIG=conf)
+        self.proc = subprocess.Popen(
+            [self.t.dps_exe, "-c", conf, "-l", "info"],
+            cwd=self.workdir, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        if not bench.wait_port(self.t.ip, self.port, 30, self.proc):
+            raise RuntimeError(f"taky_dps-rs did not start (see {self.workdir}/server.log)")
+
+    def stop(self):
+        bench.stop_proc(self.proc)
+
+
+class RsTarget:
+    """Rust target (taky-rs, taky_dps-rs) — bind_ip 127.0.0.3.
+
+    DPS: taky_dps-rs from --rs-bin (default <taky-rs>/target/debug; `cargo build -p taky-dps --bin taky_dps-rs`).
+    CoT / unit: not wired yet (T-30 needs the testkit hooks of qa01/handoff/T-11.md and a unit adapter);
+    such vectors are reported N/A, not run.
     """
 
     name = "rs"
@@ -161,14 +184,18 @@ class RsTarget:
 
     def __init__(self, ip, bin_dir=None):
         self.ip = ip
-        self.bin_dir = bin_dir
+        self.bin_dir = bin_dir or os.path.abspath(os.path.join(HERE, "..", "..", "..", "target", "debug"))
+        self.dps_exe = os.path.join(self.bin_dir, "taky_dps-rs")
+
+    def dps(self, workdir):
+        if not os.access(self.dps_exe, os.X_OK):
+            raise TargetUnavailable(f"{self.dps_exe} not found (cargo build -p taky-dps --bin taky_dps-rs)")
+        return RsDps(self, workdir)
 
     def _na(self, *_a, **_k):
-        raise TargetUnavailable(
-            "rust target is a stub: taky-rs servers are not built yet (T-20..T-25); "
-            f"reserved bind_ip {self.ip}")
+        raise TargetUnavailable("rust CoT server / unit adapter not wired into difftest yet (T-30)")
 
-    cot = dps = run_unit = _na
+    cot = run_unit = _na
 
 
 def local_non_loopback_ip():
