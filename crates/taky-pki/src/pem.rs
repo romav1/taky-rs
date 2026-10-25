@@ -180,6 +180,9 @@ pub fn key_from_block(
         }
         "PRIVATE KEY" => PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(b.der.clone())),
         "ENCRYPTED PRIVATE KEY" => {
+            if let Some(oid) = pkcs8_encryption_oid(&b.der).filter(|o| *o != PBES2_OID) {
+                return Err(unsupported_pkcs8(&oid));
+            }
             let pw = need_pw()?;
             let info = pkcs8::EncryptedPrivateKeyInfo::try_from(b.der.as_slice())
                 .map_err(|e| PkiError::Invalid(format!("encrypted PKCS#8: {e}")))?;
@@ -191,6 +194,44 @@ pub fn key_from_block(
         _ => return Ok(None),
     };
     Ok(Some(key))
+}
+
+/// `id-PBES2` (RFC 8018), the only supported PKCS#8 encryption scheme (ADR-003 errata §1).
+const PBES2_OID: &str = "1.2.840.113549.1.5.13";
+
+/// The `encryptionAlgorithm` OID of an `EncryptedPrivateKeyInfo` (dotted), if it parses that far.
+fn pkcs8_encryption_oid(der: &[u8]) -> Option<String> {
+    use der::{Decode, Reader, SliceReader};
+    let mut r = SliceReader::new(der).ok()?;
+    r.sequence(|r| {
+        let alg = pkcs8::spki::AlgorithmIdentifierRef::decode(r)?;
+        let _data = der::asn1::OctetStringRef::decode(r)?;
+        Ok(alg.oid.to_string())
+    })
+    .ok()
+}
+
+/// Review-3D N-1: PBES1 / PKCS#12-PBE keys are a clear startup error with the remedy.
+fn unsupported_pkcs8(oid: &str) -> PkiError {
+    let name = match oid {
+        "1.2.840.113549.1.5.1" => " (pbeWithMD2AndDES-CBC)",
+        "1.2.840.113549.1.5.3" => " (pbeWithMD5AndDES-CBC)",
+        "1.2.840.113549.1.5.4" => " (pbeWithMD2AndRC2-CBC)",
+        "1.2.840.113549.1.5.6" => " (pbeWithMD5AndRC2-CBC)",
+        "1.2.840.113549.1.5.10" => " (pbeWithSHA1AndDES-CBC)",
+        "1.2.840.113549.1.5.11" => " (pbeWithSHA1AndRC2-CBC)",
+        "1.2.840.113549.1.12.1.1" => " (pbeWithSHAAnd128BitRC4)",
+        "1.2.840.113549.1.12.1.2" => " (pbeWithSHAAnd40BitRC4)",
+        "1.2.840.113549.1.12.1.3" => " (pbeWithSHAAnd3-KeyTripleDES-CBC)",
+        "1.2.840.113549.1.12.1.4" => " (pbeWithSHAAnd2-KeyTripleDES-CBC)",
+        "1.2.840.113549.1.12.1.5" => " (pbeWithSHAAnd128BitRC2-CBC)",
+        "1.2.840.113549.1.12.1.6" => " (pbeWithSHAAnd40BitRC2-CBC)",
+        _ => "",
+    };
+    PkiError::Invalid(format!(
+        "unsupported PKCS#8 encryption {oid}{name}; only PBES2 is supported; \
+         re-encrypt: openssl pkcs8 -topk8 -v2 aes-256-cbc -in <key> -out <new key>"
+    ))
 }
 
 fn is_legacy_encrypted(b: &PemBlock) -> bool {
@@ -350,5 +391,59 @@ mod tests {
         ));
         assert!(matches!(key_from_block(&mk("CERTIFICATE"), None), Ok(None)));
         assert!(key_from_block(&mk("ENCRYPTED PRIVATE KEY"), None).is_err());
+    }
+
+    #[test]
+    fn pbes1_and_pkcs12_pbe_named_with_remedy() {
+        // EncryptedPrivateKeyInfo { AlgorithmIdentifier { oid, SEQ { OCTET STRING salt, INT 2048 } }, OCTET STRING }
+        let epki = |oid: &[u8]| {
+            let params = [
+                0x30, 0x0e, 0x04, 0x08, 1, 2, 3, 4, 5, 6, 7, 8, 0x02, 0x02, 0x08, 0x00,
+            ];
+            let mut alg = vec![0x06, oid.len() as u8];
+            alg.extend_from_slice(oid);
+            alg.extend_from_slice(&params);
+            let mut body = vec![0x30, alg.len() as u8];
+            body.extend_from_slice(&alg);
+            body.extend_from_slice(&[0x04, 0x04, 0xde, 0xad, 0xbe, 0xef]);
+            let mut der = vec![0x30, body.len() as u8];
+            der.extend_from_slice(&body);
+            PemBlock {
+                label: "ENCRYPTED PRIVATE KEY".into(),
+                headers: vec![],
+                der,
+            }
+        };
+        let cases: [(&[u8], &str); 2] = [
+            (
+                &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x0c, 0x01, 0x03],
+                "1.2.840.113549.1.12.1.3 (pbeWithSHAAnd3-KeyTripleDES-CBC)",
+            ),
+            (
+                &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x05, 0x03],
+                "1.2.840.113549.1.5.3 (pbeWithMD5AndDES-CBC)",
+            ),
+        ];
+        for (oid, name) in cases {
+            // Reported even without key_pw: the password would not help.
+            for pw in [None, Some("pw")] {
+                let Err(PkiError::Invalid(msg)) = key_from_block(&epki(oid), pw) else {
+                    panic!("expected Invalid for {name}");
+                };
+                assert!(
+                    msg.contains(&format!("unsupported PKCS#8 encryption {name}")),
+                    "{msg}"
+                );
+                assert!(
+                    msg.contains("openssl pkcs8 -topk8 -v2 aes-256-cbc"),
+                    "{msg}"
+                );
+            }
+        }
+        let pbes2 = [0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x05, 0x0d];
+        assert_eq!(
+            pkcs8_encryption_oid(&epki(&pbes2).der).as_deref(),
+            Some(PBES2_OID)
+        );
     }
 }

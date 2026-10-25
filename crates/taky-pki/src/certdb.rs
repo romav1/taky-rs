@@ -4,10 +4,18 @@
 //!
 //! Locking: an exclusive `flock` on the sidecar `<cert_db>.lock` (the data file itself is
 //! replaced by rename, so it cannot carry the lock). Readers do not lock: rename is atomic.
-//! Python takyctl does not lock at all, so it can still race with us (OQ-C3).
+//! Python takyctl does not lock at all, so it can still race with us (OQ-C3, risk R5).
+//!
+//! Ownership (ADR-003 errata §4, review-3D B-1): Python rewrites the file in place, so its owner
+//! never changes. We replace it, so as root (`sudo takyctl-rs`) the tmp file and a newly created
+//! lock file are `fchown`ed to the data file's uid/gid (the directory's when the data file does
+//! not exist yet); an existing lock that is not writable is opened read-only (`flock` needs no
+//! write access). A symlinked `ssl.cert_db` is resolved first, so the link target is replaced and
+//! the link is kept (Python writes through the link; review-3D N-3).
 
 use std::fs::{self, File, OpenOptions};
-use std::io::Write;
+use std::io::{ErrorKind, Write};
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
@@ -86,7 +94,6 @@ struct Stamp {
 }
 
 fn stamp(path: &Path) -> Option<Stamp> {
-    use std::os::unix::fs::MetadataExt;
     let m = fs::metadata(path).ok()?;
     Some(Stamp {
         mtime: m.modified().ok()?,
@@ -101,6 +108,8 @@ pub struct CertDb {
     path: PathBuf,
     records: Vec<CertRecord>,
     stamp: Option<Stamp>,
+    /// The last error returned by [`CertDb::refresh`] and the stamp it was seen at.
+    reported: Option<(Option<Stamp>, String)>,
 }
 
 impl CertDb {
@@ -110,6 +119,7 @@ impl CertDb {
             path: path.to_owned(),
             records: Vec::new(),
             stamp: None,
+            reported: None,
         };
         db.reload()?;
         Ok(db)
@@ -133,6 +143,29 @@ impl CertDb {
         }
         self.reload()?;
         Ok(true)
+    }
+
+    /// [`CertDb::reload_if_changed`] for per-request / per-connect callers that log: the file is
+    /// re-read on every call while it keeps failing (so a `chmod`/`chown` fix is picked up), but a
+    /// given error is returned only once per file stamp (mtime/size/inode); later calls return
+    /// `None` until the file changes or the error text changes. Success clears the memory.
+    /// On error the in-memory records are kept (review-3D N-2).
+    pub fn refresh(&mut self) -> Option<PkiError> {
+        match self.reload_if_changed() {
+            Ok(_) => {
+                self.reported = None;
+                None
+            }
+            Err(e) => {
+                let key = (stamp(&self.path), e.to_string());
+                if self.reported.as_ref() == Some(&key) {
+                    None
+                } else {
+                    self.reported = Some(key);
+                    Some(e)
+                }
+            }
+        }
     }
 
     /// Unconditional re-read.
@@ -212,10 +245,11 @@ impl CertDb {
         &mut self,
         f: impl FnOnce(&mut Vec<CertRecord>) -> Result<(), PkiError>,
     ) -> Result<(), PkiError> {
-        let _lock = lock(&self.path)?;
-        let mut records = read_file(&self.path)?;
+        let target = resolve_symlinks(&self.path);
+        let _lock = lock(&target)?;
+        let mut records = read_file(&target)?;
         f(&mut records)?;
-        write_file(&self.path, &records)?;
+        write_file(&target, &records)?;
         self.records = records;
         self.stamp = stamp(&self.path);
         Ok(())
@@ -235,14 +269,95 @@ fn sidecar(path: &Path, suffix: &str) -> PathBuf {
     PathBuf::from(s)
 }
 
+/// Follow a symlink chain (≤ 40 hops, like `ELOOP`) to the file that is actually written, so the
+/// rename replaces the target and keeps the link. A dangling link resolves to its (missing)
+/// target, which is then created, as Python `open(path, "w")` does.
+fn resolve_symlinks(path: &Path) -> PathBuf {
+    let mut p = path.to_owned();
+    for _ in 0..40 {
+        let Ok(m) = fs::symlink_metadata(&p) else {
+            return p;
+        };
+        if !m.file_type().is_symlink() {
+            return p;
+        }
+        let Ok(next) = fs::read_link(&p) else {
+            return p;
+        };
+        p = match p.parent() {
+            Some(dir) if next.is_relative() => dir.join(next),
+            _ => next,
+        };
+    }
+    p
+}
+
+/// uid/gid that files written next to `path` must get: the data file's, or its directory's when
+/// the data file does not exist yet.
+fn owner_of(path: &Path) -> Option<(u32, u32)> {
+    let m = fs::metadata(path).ok().or_else(|| {
+        let dir = match path.parent() {
+            Some(d) if !d.as_os_str().is_empty() => d,
+            _ => Path::new("."),
+        };
+        fs::metadata(dir).ok()
+    })?;
+    Some((m.uid(), m.gid()))
+}
+
+/// Give a file we just created the owner of the cert-db (B-1). As root: `fchown` to uid/gid
+/// (errors are reported). Otherwise only the group is attempted, best effort (EPERM ignored).
+fn adopt_owner(f: &File, owner: Option<(u32, u32)>, path: &Path) -> Result<(), PkiError> {
+    let Some((uid, gid)) = owner else {
+        return Ok(());
+    };
+    let cur = f.metadata().map_err(io_err(path))?;
+    if (cur.uid(), cur.gid()) == (uid, gid) {
+        return Ok(());
+    }
+    if nix::unistd::geteuid().is_root() {
+        std::os::unix::fs::fchown(f, Some(uid), Some(gid)).map_err(io_err(path))
+    } else {
+        if cur.gid() != gid {
+            let _ = std::os::unix::fs::fchown(f, None, Some(gid));
+        }
+        Ok(())
+    }
+}
+
+/// Open the sidecar lock: an existing one read-write, or read-only when it is not writable for
+/// us; a missing one is created (`O_EXCL`) and given the cert-db owner.
+fn open_lock(lp: &Path, owner: Option<(u32, u32)>) -> Result<File, PkiError> {
+    for _ in 0..2 {
+        match OpenOptions::new().read(true).write(true).open(lp) {
+            Ok(f) => return Ok(f),
+            Err(e) if e.kind() == ErrorKind::PermissionDenied => {
+                return OpenOptions::new().read(true).open(lp).map_err(io_err(lp));
+            }
+            Err(e) if e.kind() == ErrorKind::NotFound => {}
+            Err(e) => return Err(io_err(lp)(e)),
+        }
+        match OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .open(lp)
+        {
+            Ok(f) => {
+                adopt_owner(&f, owner, lp)?;
+                return Ok(f);
+            }
+            // Another writer created it in between: open the existing one.
+            Err(e) if e.kind() == ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(io_err(lp)(e)),
+        }
+    }
+    OpenOptions::new().read(true).open(lp).map_err(io_err(lp))
+}
+
 fn lock(path: &Path) -> Result<Flock<File>, PkiError> {
     let lp = sidecar(path, ".lock");
-    let f = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(&lp)
-        .map_err(io_err(&lp))?;
+    let f = open_lock(&lp, owner_of(path))?;
     Flock::lock(f, FlockArg::LockExclusive).map_err(|(_, e)| PkiError::Io {
         path: lp,
         source: std::io::Error::from(e),
@@ -287,7 +402,9 @@ fn write_file(path: &Path, records: &[CertRecord]) -> Result<(), PkiError> {
     let tmp = sidecar(path, &format!(".tmp.{}", std::process::id()));
     let res = (|| {
         let mut f = File::create(&tmp).map_err(io_err(&tmp))?;
-        // Keep the permissions of the file being replaced (Python rewrites it in place).
+        // Keep the owner (B-1) and the permissions of the file being replaced (Python rewrites it
+        // in place). chown first: it may clear set-id bits that the chmod then restores.
+        adopt_owner(&f, owner_of(path), &tmp)?;
         if let Ok(m) = fs::metadata(path) {
             f.set_permissions(m.permissions()).map_err(io_err(&tmp))?;
         }
@@ -446,6 +563,213 @@ R\t2026-10-16T19:03:45\t2026-10-18T19:04:40.195511\t3674ed1632305d915641de243191
         let mode = fs::metadata(&p).expect("meta").permissions().mode() & 0o777;
         assert_eq!(mode, 0o640);
         assert!(db.is_revoked(&sn));
+    }
+
+    #[test]
+    fn symlinked_db_keeps_link() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::tempdir().expect("tmp");
+        fs::create_dir(dir.path().join("real")).expect("mkdir");
+        let target = dir.path().join("real/cert-db.txt");
+        fs::write(&target, SAMPLE).expect("write");
+        let link = dir.path().join("cert-db.txt");
+        symlink("real/cert-db.txt", &link).expect("symlink");
+        let mut db = CertDb::open(&link).expect("open");
+        let sn = db.records()[0].serial.clone();
+        db.revoke(&sn, dt("2030-01-01T00:00:00")).expect("revoke");
+        assert!(
+            fs::symlink_metadata(&link)
+                .expect("meta")
+                .file_type()
+                .is_symlink()
+        );
+        assert!(
+            fs::read_to_string(&target)
+                .expect("read")
+                .starts_with("R\t")
+        );
+        assert!(dir.path().join("real/cert-db.txt.lock").exists());
+        assert!(!dir.path().join("cert-db.txt.lock").exists());
+        assert!(!db.reload_if_changed().expect("stamp"));
+
+        // Dangling link: the target is created, the link stays.
+        let dangling = dir.path().join("dangling.txt");
+        symlink("real/new-db.txt", &dangling).expect("symlink");
+        let mut db = CertDb::open(&dangling).expect("open");
+        db.add(&self_signed()).expect("add");
+        assert!(
+            fs::symlink_metadata(&dangling)
+                .expect("meta")
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(
+            CertDb::open(&dir.path().join("real/new-db.txt"))
+                .expect("open")
+                .records()
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn refresh_reports_an_error_once_per_stamp() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let p = dir.path().join("cert-db.txt");
+        fs::write(&p, SAMPLE).expect("write");
+        let mut db = CertDb::open(&p).expect("open");
+        assert!(db.refresh().is_none());
+        fs::write(&p, "V\tnope\t2027-01-01T00:00:00\t01\tx\n").expect("write");
+        assert!(matches!(db.refresh(), Some(PkiError::Invalid(_))));
+        for _ in 0..3 {
+            assert!(db.refresh().is_none(), "same stamp, same error: silent");
+        }
+        // Records are kept while the file is bad.
+        assert_eq!(db.records().len(), 2);
+        // A different broken content (new stamp) is reported again.
+        fs::write(&p, "V\t2026-01-01T00:00:00\tnope-nope\t01\tx\n").expect("write");
+        assert!(db.refresh().is_some());
+        assert!(db.refresh().is_none());
+        // Fixed: re-read, and a later failure is reported again.
+        fs::write(&p, SAMPLE).expect("write");
+        assert!(db.refresh().is_none());
+        assert_eq!(db.records().len(), 2);
+        fs::write(&p, "V\tnope\t2027-01-01T00:00:00\t01\tx\n").expect("write");
+        assert!(db.refresh().is_some());
+    }
+
+    fn self_signed() -> Vec<u8> {
+        rcgen::generate_simple_self_signed(vec!["localhost".into()])
+            .expect("cert")
+            .cert
+            .der()
+            .to_vec()
+    }
+
+    fn uid_gid(p: &Path) -> (u32, u32) {
+        let m = fs::metadata(p).expect("meta");
+        (m.uid(), m.gid())
+    }
+
+    /// B-1: a lock file this user cannot write (e.g. created by `sudo takyctl-rs` before the fix)
+    /// does not prevent a revoke. Non-root: chmod 0444. Root (no EACCES for root): re-run this
+    /// test binary as `nobody` against a root-owned 0644 lock.
+    #[test]
+    fn readonly_lock_does_not_block_revoke() {
+        use std::os::unix::fs::{PermissionsExt, chown};
+        use std::os::unix::process::CommandExt;
+        let dir = tempfile::tempdir().expect("tmp");
+        let p = dir.path().join("cert-db.txt");
+        fs::write(&p, SAMPLE).expect("write");
+        let lp = dir.path().join("cert-db.txt.lock");
+        fs::write(&lp, "").expect("lock");
+        fs::set_permissions(&lp, fs::Permissions::from_mode(0o644)).expect("chmod");
+        let sn = CertDb::open(&p).expect("open").records()[0].serial.clone();
+        if !nix::unistd::geteuid().is_root() {
+            fs::set_permissions(&lp, fs::Permissions::from_mode(0o444)).expect("chmod");
+            let mut db = CertDb::open(&p).expect("open");
+            db.revoke(&sn, dt("2030-01-01T00:00:00"))
+                .expect("revoke via ro lock");
+            assert!(CertDb::open(&p).expect("open").is_revoked(&sn));
+            return;
+        }
+        const NOBODY: u32 = 65534;
+        chown(dir.path(), Some(NOBODY), Some(NOBODY)).expect("chown dir");
+        chown(&p, Some(NOBODY), Some(NOBODY)).expect("chown db");
+        // The lock stays root:root 0644, as `sudo takyctl-rs` left it before the fix.
+        let exe = std::env::current_exe().expect("exe");
+        let out = std::process::Command::new(exe)
+            .args([
+                "--ignored",
+                "--exact",
+                "certdb::tests::child_revoke_first",
+                "--nocapture",
+            ])
+            .env("TAKY_CERTDB_CHILD", &p)
+            .uid(NOBODY)
+            .gid(NOBODY)
+            .output()
+            .expect("spawn child as nobody");
+        assert!(
+            out.status.success() && String::from_utf8_lossy(&out.stdout).contains("1 passed"),
+            "child: {}\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(CertDb::open(&p).expect("open").is_revoked(&sn));
+        assert_eq!(uid_gid(&p), (NOBODY, NOBODY));
+        assert_eq!(uid_gid(&lp), (0, 0));
+    }
+
+    /// Helper of [`readonly_lock_does_not_block_revoke`] (runs as `nobody`).
+    #[test]
+    #[ignore = "spawned by readonly_lock_does_not_block_revoke"]
+    fn child_revoke_first() {
+        let p = PathBuf::from(std::env::var_os("TAKY_CERTDB_CHILD").expect("env"));
+        assert!(!nix::unistd::geteuid().is_root());
+        assert!(
+            OpenOptions::new()
+                .write(true)
+                .open(sidecar(&p, ".lock"))
+                .is_err()
+        );
+        let mut db = CertDb::open(&p).expect("open");
+        let sn = db.records()[0].serial.clone();
+        db.revoke(&sn, dt("2030-01-01T00:00:00")).expect("revoke");
+    }
+
+    /// B-1: as root, the replaced data file and a new lock keep/get the cert-db owner (the
+    /// directory's for a new database). Skipped when not root (CI): the non-root path is the
+    /// plain one, covered by the other tests.
+    #[test]
+    fn root_writes_keep_db_owner() {
+        use std::os::unix::fs::{PermissionsExt, chown};
+        if !nix::unistd::geteuid().is_root() {
+            eprintln!("root_writes_keep_db_owner: skipped (not root)");
+            return;
+        }
+        let dir = tempfile::tempdir().expect("tmp");
+        chown(dir.path(), Some(1000), Some(1001)).expect("chown dir");
+        // Existing database owned by the service user, 0600.
+        let p = dir.path().join("cert-db.txt");
+        fs::write(&p, SAMPLE).expect("write");
+        chown(&p, Some(2000), Some(2001)).expect("chown db");
+        fs::set_permissions(&p, fs::Permissions::from_mode(0o600)).expect("chmod");
+        let mut db = CertDb::open(&p).expect("open");
+        let sn = db.records()[0].serial.clone();
+        db.revoke(&sn, dt("2030-01-01T00:00:00")).expect("revoke");
+        db.add(&self_signed()).expect("add");
+        assert_eq!(uid_gid(&p), (2000, 2001));
+        assert_eq!(
+            fs::metadata(&p).expect("meta").permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(uid_gid(&dir.path().join("cert-db.txt.lock")), (2000, 2001));
+        assert!(CertDb::open(&p).expect("open").is_revoked(&sn));
+        // No tmp left behind.
+        let names: Vec<_> = fs::read_dir(dir.path())
+            .expect("ls")
+            .map(|e| e.expect("entry").file_name())
+            .collect();
+        assert_eq!(names.len(), 2, "{names:?}");
+
+        // New database: owner of the directory.
+        let q = dir.path().join("new-db.txt");
+        let mut db = CertDb::open(&q).expect("open");
+        db.add(&self_signed()).expect("add");
+        assert_eq!(uid_gid(&q), (1000, 1001));
+        assert_eq!(uid_gid(&dir.path().join("new-db.txt.lock")), (1000, 1001));
+
+        // An existing root-owned lock (left by an older build) is reused as is.
+        let r = dir.path().join("third.txt");
+        fs::write(&r, SAMPLE).expect("write");
+        chown(&r, Some(2000), Some(2001)).expect("chown");
+        let rl = dir.path().join("third.txt.lock");
+        fs::write(&rl, "").expect("lock");
+        let mut db = CertDb::open(&r).expect("open");
+        db.revoke(&sn, dt("2030-01-01T00:00:00")).expect("revoke");
+        assert_eq!(uid_gid(&r), (2000, 2001));
+        assert_eq!(uid_gid(&rl), (0, 0));
     }
 
     #[test]

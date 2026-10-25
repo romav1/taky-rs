@@ -248,6 +248,28 @@ fn openssl_encrypted_keys_interop() {
         with_key(&pem, Some("pw")).unwrap_or_else(|e| panic!("{name}: {e}"));
         assert!(with_key(&pem, Some("bad")).is_err(), "{name}");
     }
+    // PBES1 / PKCS#12-PBE (ADR-003 errata §1): a clear error naming the scheme and the remedy
+    // (review-3D N-1), not "bad key_pw".
+    let pem = run(
+        &[
+            "pkcs8",
+            "-topk8",
+            "-v1",
+            "PBE-SHA1-3DES",
+            "-passout",
+            "pass:pw",
+        ],
+        "p8-pbe-sha1-3des",
+    );
+    let msg = with_key(&pem, Some("pw"))
+        .err()
+        .map(|e| e.to_string())
+        .unwrap_or_default();
+    assert!(
+        msg.contains("unsupported PKCS#8 encryption 1.2.840.113549.1.12.1.3")
+            && msg.contains("openssl pkcs8 -topk8 -v2 aes-256-cbc"),
+        "{msg}"
+    );
 }
 
 #[test]

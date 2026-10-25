@@ -229,7 +229,8 @@ impl Hub {
                 "Checking {} against cert db",
                 hex_upper(serial)
             );
-            if let Err(e) = db.reload_if_changed() {
+            // One WARNING per cert-db change, not per connect (review-3D N-2).
+            if let Some(e) = db.refresh() {
                 pylog!(LGR, Level::WARN, "Unable to re-read cert-db: {e}");
             }
             if db.is_revoked(serial) {

@@ -2,14 +2,19 @@
 //! peer identity injected per request (ADR-004 option 1).
 
 use std::convert::Infallible;
+use std::future::Future;
 use std::net::{IpAddr, SocketAddr};
-use std::sync::{Arc, Mutex};
+use std::pin::Pin;
+use std::sync::{Arc, Mutex, PoisonError};
+use std::task::{Context, Poll};
 use std::time::Duration;
 
+use axum::BoxError;
 use axum::Router;
+use axum::body::Bytes;
 use axum::http::Request;
 use axum::response::Response;
-use hyper::body::Incoming;
+use hyper::body::{Body, Frame, Incoming, SizeHint};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper_util::rt::{TokioIo, TokioTimer};
@@ -24,7 +29,8 @@ use tower::ServiceExt;
 use crate::app::pre_route;
 use crate::identity::{plain_header_policy, tls_header_policy};
 
-/// TLS handshake / request header timeout (gunicorn sync worker `timeout = 30`).
+/// TLS handshake / request header timeout, and the request body inactivity timeout
+/// (gunicorn sync worker `timeout = 30`; ADR-004 errata §5, review-3D N-4).
 const IO_TIMEOUT: Duration = Duration::from_secs(30);
 /// Graceful shutdown budget for open connections (ADR-004).
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(30);
@@ -47,8 +53,11 @@ enum Peer {
 impl Ctx {
     fn revoked(&self, serial: &[u8]) -> bool {
         let Some(db) = &self.certdb else { return false };
-        let Ok(mut db) = db.lock() else { return false };
-        if let Err(e) = db.reload_if_changed() {
+        // A panic while holding the lock cannot leave CertDb half-updated (records are swapped
+        // in whole), so a poisoned mutex is used as is instead of failing open (review-3D N-2).
+        let mut db = db.lock().unwrap_or_else(PoisonError::into_inner);
+        // One WARNING per cert-db change, not per request (review-3D N-2).
+        if let Some(e) = db.refresh() {
             tracing::warn!("cert-db {}: {e}", db.path().display());
         }
         db.is_revoked(serial)
@@ -69,6 +78,10 @@ impl Ctx {
                 "https"
             }
         };
+        // N-4: a client that stops sending the body mid-way no longer holds the task and the fd
+        // forever; the handler sees a body error (⇒ 400 / malformed) and hyper closes the
+        // connection, because the body was not read to the end.
+        let req = req.map(|b| IdleTimeoutBody::new(b, IO_TIMEOUT));
         let access = crate::stdout_enabled().then(|| AccessInfo::of(&req));
         let resp = match pre_route(req, scheme) {
             Err(resp) => *resp,
@@ -146,6 +159,79 @@ impl Ctx {
         if let Err(e) = res {
             tracing::debug!("http connection: {e}");
         }
+    }
+}
+
+/// The request body is idle (no frame) for longer than the timeout.
+#[derive(Debug, thiserror::Error)]
+#[error("request body: no data for {0:?}")]
+pub(crate) struct BodyIdleTimeout(Duration);
+
+/// A request body with a per-read inactivity timeout: the timer runs only while the reader waits
+/// for the next frame and restarts after each frame (hyper has only `header_read_timeout`).
+pub(crate) struct IdleTimeoutBody<B> {
+    inner: B,
+    timeout: Duration,
+    sleep: Option<Pin<Box<tokio::time::Sleep>>>,
+    expired: bool,
+}
+
+impl<B> IdleTimeoutBody<B> {
+    pub(crate) fn new(inner: B, timeout: Duration) -> Self {
+        IdleTimeoutBody {
+            inner,
+            timeout,
+            sleep: None,
+            expired: false,
+        }
+    }
+}
+
+impl<B> Body for IdleTimeoutBody<B>
+where
+    B: Body<Data = Bytes> + Unpin,
+    B::Error: Into<BoxError>,
+{
+    type Data = Bytes;
+    type Error = BoxError;
+
+    fn poll_frame(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<Option<Result<Frame<Bytes>, BoxError>>> {
+        let this = self.get_mut();
+        if this.expired {
+            return Poll::Ready(None);
+        }
+        match Pin::new(&mut this.inner).poll_frame(cx) {
+            Poll::Ready(r) => {
+                this.sleep = None;
+                Poll::Ready(r.map(|r| r.map_err(Into::into)))
+            }
+            Poll::Pending => {
+                let t = this.timeout;
+                let sleep = this
+                    .sleep
+                    .get_or_insert_with(|| Box::pin(tokio::time::sleep(t)));
+                match sleep.as_mut().poll(cx) {
+                    Poll::Ready(()) => {
+                        this.sleep = None;
+                        this.expired = true;
+                        tracing::debug!("request body idle for {t:?}, aborting");
+                        Poll::Ready(Some(Err(Box::new(BodyIdleTimeout(t)))))
+                    }
+                    Poll::Pending => Poll::Pending,
+                }
+            }
+        }
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.expired || self.inner.is_end_stream()
+    }
+
+    fn size_hint(&self) -> SizeHint {
+        self.inner.size_hint()
     }
 }
 
@@ -244,6 +330,80 @@ mod tests {
     use axum::body::Body;
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
+
+    /// A body that yields `frames`, then stays pending forever.
+    struct Stalled(Vec<&'static [u8]>);
+
+    impl hyper::body::Body for Stalled {
+        type Data = Bytes;
+        type Error = Infallible;
+        fn poll_frame(
+            mut self: Pin<&mut Self>,
+            _cx: &mut Context<'_>,
+        ) -> Poll<Option<Result<Frame<Bytes>, Infallible>>> {
+            if self.0.is_empty() {
+                Poll::Pending
+            } else {
+                let f = self.0.remove(0);
+                Poll::Ready(Some(Ok(Frame::data(Bytes::from_static(f)))))
+            }
+        }
+    }
+
+    async fn frame<B: hyper::body::Body + Unpin>(
+        b: &mut B,
+    ) -> Option<Result<Frame<B::Data>, B::Error>> {
+        std::future::poll_fn(|cx| Pin::new(&mut *b).poll_frame(cx)).await
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn idle_body_times_out_after_last_frame() {
+        let mut b = IdleTimeoutBody::new(Stalled(vec![b"ab", b"cd"]), IO_TIMEOUT);
+        let t0 = tokio::time::Instant::now();
+        for want in [&b"ab"[..], b"cd"] {
+            let f = frame(&mut b).await.expect("frame").expect("ok");
+            assert_eq!(f.into_data().expect("data"), want);
+        }
+        let err = frame(&mut b).await.expect("frame").expect_err("timeout");
+        assert!(err.is::<BodyIdleTimeout>(), "{err}");
+        assert_eq!(t0.elapsed(), IO_TIMEOUT);
+        assert!(frame(&mut b).await.is_none());
+        assert!(hyper::body::Body::is_end_stream(&b));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn complete_body_is_untouched() {
+        let body = IdleTimeoutBody::new(axum::body::Body::from("hello"), IO_TIMEOUT);
+        let bytes = axum::body::to_bytes(axum::body::Body::new(body), usize::MAX)
+            .await
+            .expect("collect");
+        assert_eq!(bytes, "hello");
+    }
+
+    #[test]
+    fn poisoned_certdb_mutex_still_bans() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let p = dir.path().join("cert-db.txt");
+        std::fs::write(
+            &p,
+            "R\t2026-01-01T00:00:00\t2026-02-01T00:00:00\t0a\tBANNED\n",
+        )
+        .expect("write");
+        let ctx = Arc::new(Ctx {
+            router: Router::new(),
+            tls: None,
+            certdb: Some(Mutex::new(CertDb::open(&p).expect("open"))),
+        });
+        let c2 = ctx.clone();
+        let _ = std::thread::spawn(move || {
+            let _g = c2.certdb.as_ref().expect("db").lock();
+            panic!("poison");
+        })
+        .join();
+        assert!(ctx.certdb.as_ref().expect("db").is_poisoned());
+        assert!(ctx.revoked(&[0x0a]));
+        assert!(!ctx.revoked(&[0x0b]));
+    }
 
     #[test]
     fn gunicorn_access_line() {

@@ -156,3 +156,44 @@ async fn plain_mode_policy_options_and_errors() {
     assert_eq!((r.status, r.body.len()), (401, 317));
     h.stop().await;
 }
+
+/// Review-3D N-4 (ADR-004 errata §5): a client that stops sending the request body is cut off
+/// after 30 s without data; the connection task ends and the upload is not stored.
+#[tokio::test(start_paused = true)]
+async fn stalled_upload_body_times_out() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let h = Harness::new(&json!({})).await;
+    let (mut client, server) = tokio::io::duplex(1 << 16);
+    let app = h.app.clone();
+    let peer: std::net::SocketAddr = "127.0.0.1:50000".parse().unwrap();
+    let serve = tokio::spawn(async move { app.serve_connection(server, peer).await });
+    let hash = "a".repeat(64);
+    let head = format!(
+        "POST /Marti/sync/missionupload?hash={hash}&filename=a.zip&creatorUid=u1 HTTP/1.1\r\n\
+         Host: x\r\nX-USER: alice\r\nContent-Type: multipart/form-data; boundary=bb\r\n\
+         Content-Length: 100000\r\n\r\n--bb\r\n\
+         Content-Disposition: form-data; name=\"assetfile\"; filename=\"a.zip\"\r\n\r\nPK\x03\x04"
+    );
+    client.write_all(head.as_bytes()).await.unwrap();
+    let t0 = tokio::time::Instant::now();
+    let mut buf = Vec::new();
+    let read = tokio::time::timeout(
+        std::time::Duration::from_secs(300),
+        client.read_to_end(&mut buf),
+    )
+    .await;
+    assert!(read.is_ok(), "connection still open after 300 s");
+    let waited = t0.elapsed();
+    assert!(
+        waited >= std::time::Duration::from_secs(30) && waited < std::time::Duration::from_secs(60),
+        "{waited:?}"
+    );
+    let text = String::from_utf8_lossy(&buf);
+    assert!(text.starts_with("HTTP/1.1 400 "), "{text}");
+    tokio::time::timeout(std::time::Duration::from_secs(5), serve)
+        .await
+        .expect("serve_connection ended")
+        .unwrap();
+    assert!(!h.upload_path.join("u1_a.zip").exists());
+    h.stop().await;
+}

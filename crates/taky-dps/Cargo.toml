@@ -45,6 +45,8 @@ assert_cmd.workspace = true
 # Test certificates are generated at test time (no keys in the repo).
 rcgen.workspace = true
 taky-common = { workspace = true, features = ["testkit"] }
+# Paused clock for the 30 s body inactivity timeout tests (review-3D N-4).
+tokio = { workspace = true, features = ["test-util"] }
 
 [lints]
 workspace = true
