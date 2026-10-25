@@ -238,7 +238,7 @@ Access log to stdout in the gunicorn format `%(t)s "%(r)s" %(s)s %(b)s "%(a)s"`.
 | Shared frames | `Arc<[u8]>` | broadcast to N clients does not copy data | `tostring` per client |
 | TLS handshake | 10 s | timeout ⇒ close, log `"SSL Handshake timeout"` | 10 s (as in the original) |
 | Size of a single top-level element | 4 MiB | exceeded ⇒ disconnect `"XML Syntax Error"` | no limit (TODO in the original; libxml2 — ~10 MB per text node) (D-2) |
-| Depth/attributes/names | 256 (as libxml2) / 256 / 1 KiB | same | depth 256 — libxml2 |
+| Depth/attributes/names/nodes | 256 incl. the virtual `<root>` (as libxml2: 255 nested ok) / 256 / 1 KiB / 100 000 nodes per top-level element | same | depth 256 — libxml2 |
 | Socket send | `write_all` with a 30 s timeout per frame | timeout ⇒ disconnect | non-blocking send |
 | Number of connections | no limit (as the original), `ulimit` | — | — |
 
@@ -402,19 +402,37 @@ pub struct SslSect { pub enabled: bool, pub client_cert_required: bool, pub ca: 
     pub ca_key: Option<PathBuf>, pub server_p12: Option<PathBuf>, pub server_p12_pw: Option<String>,
     pub cert: Option<PathBuf>, pub key: Option<PathBuf>, pub key_pw: Option<String>, pub cert_db: PathBuf }
 pub fn load_config(path: Option<&Path>, explicit: bool) -> Result<TakyConfig, ConfigError>;
+pub fn load_config_in(path: Option<&Path>, explicit: bool, cwd: &Path) -> Result<TakyConfig, ConfigError>; // testable cwd (S-302)
+pub const LOCAL_CONFIG: &str = "taky.conf"; pub const SYSTEM_CONFIG: &str = "/etc/taky/taky.conf";  // taky_config::load
 pub fn default_ini() -> Ini;                       // DEFAULT_CFG (for takyctl setup)
 impl Ini { pub fn parse(src: &str, source: &str) -> Result<Ini, IniError>;
+           pub fn read_str(&mut self, src: &str, source: &str) -> Result<(), IniError>;   // read_string on top
            pub fn get(&self, s: &str, k: &str) -> Result<Option<String>, IniError>; // with interpolation
+           pub fn get_raw(&self, s: &str, k: &str) -> Result<Option<&str>, IniError>;
            pub fn getboolean(&self, s: &str, k: &str) -> Result<bool, IniError>;
            pub fn set(&mut self, s: &str, k: &str, v: Option<&str>) -> Result<(), IniError>;
+           pub fn add_section(&mut self, s: &str) -> Result<(), IniError>;  // + has_section, sections, section_items
            pub fn write(&self) -> String; }
+// IniError: + InvalidSectionName, InvalidInterpolation; Duplicate*.source_name/line: Option (S-301).
+// Display of IniError == Python str(exc) byte-for-byte; IniError::py_class()/ConfigError::py_class() = Python class name
+// (vectors, logs). SslSect.client_cert_required is informative: an invalid value is NOT an error of load_config
+// (as config.py); taky-server re-validates with raw().getboolean (S-305 decision, parity with server.py:149).
 
 // ===== taky-xml (dev01) =====
 pub struct Element { pub tag: String /* Clark: "{ns}local" | "local" */, pub attrs: Vec<(String, String)>,
-                     pub text: Option<String>, pub tail: Option<String>, pub children: Vec<Node>, /* nsmap */ }
-pub struct Limits { pub max_bytes: usize, pub max_depth: usize, pub max_attrs: usize, pub max_name: usize }
+                     pub text: Option<String>, pub tail: Option<String>, pub children: Vec<Node>,
+                     pub nsmap: Vec<(Option<String>, String)>,     // declarations, verbatim (libxml2 nsDef)
+                     pub prefix: Option<String>,                    // original prefix (S-304); None = built in code
+                     pub attr_prefixes: Vec<(usize, String)> }      // (index into attrs, original prefix)
+impl Element { pub fn reconcile_moved_ns(&mut self); /* = lxml moveNodeToDocument; call on a cloned <detail> */ }
+pub struct Limits { pub max_bytes: usize, pub max_depth: usize, pub max_attrs: usize, pub max_name: usize,
+                    pub max_nodes: usize }
 pub fn parse_element(xml: &[u8], lim: &Limits) -> Result<Element, XmlError>;   // document without DTD
+pub struct TreeBuilder; impl TreeBuilder { pub fn new(Limits) -> Self; pub fn feed(&mut self, &[u8]) -> Result<(), XmlError>;
+                                           pub fn next_element(&mut self) -> Result<Option<Element>, XmlError>; }
 pub fn serialize(e: &Element, o: &SerOpts) -> Vec<u8>;   // == lxml.etree.tostring(e, **o)
+// taky-common (feature testkit): vectors::{vectors_dir, read_vector, workspace_root, candidates} —
+// <workspace>/tests/vectors, then ../shared/spec/vectors, panic if neither (S-302, pm01 decision).
 
 // ===== taky-cot (dev01) =====
 pub struct CotDecoder { /* TreeBuilder + Limits */ }
@@ -472,7 +490,7 @@ and with feature `testkit` — `Settle{reply}` (barrier behind `HubHandle::settl
 Feature `testkit` (never enabled in release binaries; qa01 A.2): `FakeClock`, `taky_cot::testkit::TestOutbox`,
 `Router::persist_snapshot()`, `Router::find_clients(..)`, `HubHandle::settle()`. Server and DPS start on ready
 listeners: `taky_server::start(ServerOptions, Listeners)`, `taky_dps::start(DpsOptions, TcpListener)` (qa01 A.3).
-(§14 updated after the T-10 review, arch01/handoff/review-T-10.md.)
+(§14 updated after the T-10 review, arch01/handoff/review-T-10.md, and after the 3A review, arch01/handoff/review-3A.md.)
 dev01 tests use `TestOutbox` (VecDeque) — no tokio network.
 
 ---
@@ -570,7 +588,7 @@ with a comment and arch01 review; `[sources] unknown-registry = "deny"`, `unknow
 | D-10 | mgmt: a non-object JSON ⇒ server crash (B4, V051) | `{"error": "Invalid cmd: None"}` | crash |
 | D-11 | cert-db is read once (server, DPS); writing overwrites from memory (clobbers others' writes) (B5, OQ-04/C3/D2) | re-read on mtime change; write = read-modify-write under `flock` + tmp+rename; same format | data loss, kickban without a DPS restart |
 | D-12 | log_cot name from uid/callsign without sanitization — path traversal (B7) | `/`, `\0` → `_`; name `.`/`..` → `_` (other names unchanged) | vulnerability |
-| D-13 | config ValueError/Duplicate* ⇒ traceback (B8, OQ-02/C2); a bad date in cert-db ⇒ traceback | readable message, **the same exit code 1** | UX |
+| D-13 | config ValueError/Duplicate*/TypeError ⇒ traceback (B8, OQ-02/C2; incl. `%(k)s` pointing at a key without value — Python TypeError, Rust `InterpolationMissingOption`, S-305); a bad date in cert-db ⇒ traceback | readable message, **the same exit code 1** | UX |
 | D-14 | any `%` left after interpolation (`%%`, a password with `%`) breaks loading (OQ-C1) | BasicInterpolation as intended: `%(k)s`, `%%`→`%`; a lone `%` is an error; `takyctl-rs setup` writes `%` as `%%` | superset |
 | D-15 | DPS 500 on unhandled exceptions: content with an unknown hash (OQ-D3), vcm `<uid/>` without text | 404 `File not found` / 400 `Invalid XML document` | handler crash |
 | D-16 | `takyctl systemd`: `cfg_path` = the value of `log_cot` — the command is broken (OQ-L1) | the real config path; system mode for `/etc/taky/taky.conf` | non-working command |
@@ -579,9 +597,12 @@ with a comment and arch01 review; `[sources] unknown-registry = "deny"`, `unknow
 | D-19 | a client p12 with a private key is created 0644 | 0600 | security |
 | D-20 | DPS does not pass `ssl.key_pw` (an encrypted key does not work) | DPS decrypts the key | superset |
 | D-21 | plain-HTTP DPS trusts `X-USER` from any client (OQ-D1) | **for the customer's decision (G-6)**; recommendation — only from a loopback peer | vulnerability |
+| D-22 | DPS `hash` is put into `meta/<hash>.json` unvalidated — arbitrary file read, symlink/unlink outside `meta/` (qa01 T-06) | `hash` validated (`^[A-Za-z0-9._-]+$`, no `..`), otherwise 400 `Invalid hash` (spec DC §3.2a) | vulnerability (approved ADR-008/G-8) |
+| D-23 | after an unknown entity `&foo;` libxml2 also drops the rest of that recv chunk and restarts as a bare document (the 2nd next top-level element ⇒ "Extra content" ⇒ disconnect; segmentation-dependent, Q11/V054); a bare `&` / `&#65` without `;` in text ⇒ the parser stops forever, socket stays open (zombie, B10/V055) | only the enclosing event is dropped (as Python), parsing continues with the next event; a malformed reference in text ⇒ disconnect "XML Syntax Error" (as `&` in an attribute / `&#0;` already do in Python, V056) | determinism, resource leak (S-305; pending pm01/customer confirmation) |
+| D-24 | mgmt: invalid JSON/UTF-8 frame ⇒ `{"error": "<CPython json/codec exception text>"}` (V045 step 6) | same reply shape and behavior (one reply, connection stays); the text is the `serde_json` error `Display` (e.g. `key must be a string at line 1 column 2`) — not normative (spec CS mgmt table) | no CPython-json emulation (S-305; pending pm01/customer confirmation) |
 
 Not fixed (bug-compat, visible to clients/data) — the full list R is in `shared/spec/compat-matrix.md` §2: the double
-slash in DPS URLs, `Teams.UNKNOWN == CYAN`, an unknown entity ⇒ the event is silently lost (libxml2 2.14), `<track>` without
+slash in DPS URLs, `Teams.UNKNOWN == CYAN`, an unknown entity ⇒ the event is silently lost (libxml2 2.14; its after-effects — D-23), `<track>` without
 speed ⇒ SA dropped, `persist.track` only in the broadcast branch, marti echo, double delivery to the monitor, etc.
 
 ---
