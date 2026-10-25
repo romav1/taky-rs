@@ -222,8 +222,9 @@ Access log to stdout in the gunicorn format `%(t)s "%(r)s" %(s)s %(b)s "%(a)s"`.
   3. Load: target ~1000 events/s × 100 clients = 10⁵ `try_send`/s — a single thread copes with a margin
      (estimate ≤ 5% of a Pi 4 core; qa01 verifies in T-32). The bottleneck is parsing, and that is outside the actor.
   4. Downside: the actor is a serialization point; with slow Redis it blocks routing. Mitigation: Redis
-     timeouts (§13), `track` is a `SET EX` pipeline without waiting for the reply on the hot path (fire-and-forget via
-     a separate writer task with a FIFO, so that reads in `send_persist` see earlier writes).
+     timeouts (§13). As implemented (S-309, ADR-001 errata 2026-10-25) `track`/`get_all` are awaited in the actor,
+     bounded by 500 ms per command, 1 s connect, one reconnect attempt per 5 s while down. The fire-and-forget writer
+     task (FIFO, so that reads in `send_persist` see earlier writes) is the fallback if T-32 (e) shows stalls.
 - Blocking I/O (`log_cot` files, `cert-db.txt`, DPS) — `tokio::fs`/`spawn_blocking`; the actor has no
   file operations except `CertDb::revoke` (rare; via `spawn_blocking` with a wait).
 
@@ -241,6 +242,15 @@ Access log to stdout in the gunicorn format `%(t)s "%(r)s" %(s)s %(b)s "%(a)s"`.
 | Depth/attributes/names/nodes | 256 incl. the virtual `<root>` (as libxml2: 255 nested ok) / 256 / 1 KiB / 100 000 nodes per top-level element | same | depth 256 — libxml2 |
 | Socket send | `write_all` with a 30 s timeout per frame | timeout ⇒ disconnect | non-blocking send |
 | Number of connections | no limit (as the original), `ulimit` | — | — |
+
+Slow-client policy (review-T-10 N-3, implemented in S-308, accepted in review-3B): the limit is enforced by the
+`Outbox` implementation (taky-server; byte **and** frame accounting). On `try_send` → `Full` the Router drops that
+frame, logs WARNING, calls `Outbox::close("Slow client")` and removes the client from its table immediately (no
+further fan-out, also not to later recipients of the same fan-out); on `Closed` it drops and removes without `close`.
+Counters `Router::dropped_frames()` / `slow_disconnects()` (debug only, not in mgmt). Consequences for the Hub:
+`Disconnected{id}` for an id the Router already removed is a no-op; events still arriving from a removed id are dropped
+(DEBUG); mgmt `status`/kickban (via `Router::clients()`) no longer list the client before its socket is closed.
+`Outbox::close` must be idempotent and must not block.
 
 The values are constants in `taky-cot::limits`/`taky-server::limits`; moving them to `taky.conf` (new optional
 keys, Python ignores them) — only after the customer's answer (Q-3).
@@ -365,11 +375,17 @@ handshake (in the original, events before the handshake were silently dropped �
 ```rust
 pub enum Persistence { Memory(MemoryPersistence), Redis(RedisPersistence) }
 impl Persistence {
-    pub async fn from_config(cfg: &TakyConfig) -> Persistence;          // build_persistence()
-    pub async fn track(&mut self, evt: &Event, frame: &Frame);           // KEPT_EVENTS + ttl
-    pub async fn get_all(&mut self) -> Vec<Arc<Event>>;                  // for send_persist
-    pub async fn prune(&mut self);                                       // memory: remove stale
+    // build_persistence(). Err only for an unparsable `[taky] redis` URL (Python: from_url ValueError inside
+    // COTServer() ⇒ taky-server logs ERROR `Unable to start COTServer: <err>` and exits 1). An unreachable
+    // server is not an error (latch WARNING `Lost connection to redis`). (S-309, accepted in review-3B.)
+    pub async fn from_config(cfg: &TakyConfig, clock: SharedClock) -> Result<Persistence, PersistError>;
+    pub fn memory(clock: SharedClock) -> Persistence;
+    pub async fn track(&mut self, evt: &Arc<Event>, frame: &Frame);      // KEPT_EVENTS + ttl > 0
+    pub async fn get_all(&mut self) -> Vec<Arc<Event>>;                  // for send_persist (Router uses frames too)
+    pub async fn prune(&mut self);                                       // memory: remove stale; Redis: no-op
 }
+// also pub: persist::{KEPT_EVENTS, kept_ttl, redis_key_space, DEFAULT_REDIS_URL, REDIS_CONNECT_TIMEOUT,
+//   REDIS_RESPONSE_TIMEOUT, REDIS_RETRY_INTERVAL}, RedisPersistence::{connect, key, key_prefix, is_ok, get_event, clock}
 ```
 - Memory: `HashMap<uid, Arc<Event>>`, prune by `stale` (UTC naive), as the original.
 - Redis (redis-rs, `tokio-comp` + `ConnectionManager`, auto-reconnect): key `taky:{hostname}:persist:{uid}`
@@ -378,7 +394,10 @@ impl Persistence {
   Write `SET key val EX ttl` (atomic; the resulting data is identical to the original's SET+EXPIRE pair).
   Read: `SCAN MATCH taky:{ks}:persist:* COUNT 1000` (instead of `KEYS`; same result) + `GET`; parse
   errors ⇒ purge the key. URL: `redis://`, `rediss://` (rustls), `unix://`; `redis=true` → `127.0.0.1:6379`.
-  Timeouts: connect 1 s, response 500 ms; with `rds_ok=false` — an attempt no more often than once per 5 s.
+  Timeouts: connect 1 s, response 500 ms; with `rds_ok=false` — an attempt no more often than once per 5 s
+  (injected clock). Commands are awaited in the Hub actor (ADR-001 errata 2026-10-25). Non-connection errors on
+  read (e.g. `WRONGTYPE`) ⇒ purge like a parse error; a stored event that parses but cannot be serialized (D-8) ⇒
+  ERROR, skipped, not purged. `EXISTS` is not sent (Python uses it only for DEBUG text).
 
 ---
 
@@ -444,7 +463,11 @@ pub struct Event { pub version: Option<String>, pub uid: Option<String>, pub ety
 impl Event { pub fn from_element(e: &Element) -> Result<Event, UnmarshalError>;
              pub fn to_frame(&self) -> Result<Frame, SerializeError>; /* bytes like etree.tostring */
              pub fn persist_ttl(&self, clock: &dyn Clock) -> i64; }
-impl Persistence { pub async fn from_config(cfg: &TakyConfig, clock: SharedClock) -> Persistence; /* … */ }
+impl Persistence { pub async fn from_config(cfg: &TakyConfig, clock: SharedClock)
+                       -> Result<Persistence, PersistError>; /* §13; Result since S-309 */ }
+// S-306/S-307 (accepted in review-3B): marti_cs() -> Vec<Option<String>> (None = <dest> without callsign, matches
+// no one); TakUser.course/speed: Option<f64>; TakUser/GeoChat/EventDetail/Event::to_element -> Result<Element,
+// SerializeError>; Event::to_frame propagates (D-8).
 pub type Frame = Arc<[u8]>;
 
 pub struct ClientId(pub u64);
@@ -467,10 +490,19 @@ impl Router {
     pub async fn on_event(&mut self, src: ClientId, evt: Event);   // packet_rx+ping+ident+route
     pub async fn maybe_prune(&mut self, now: tokio::time::Instant); // once per 10 s; pause/advance in tests
     pub fn clients(&self) -> impl Iterator<Item = (&ClientHandle, Option<&TakUser>)>; // for mgmt/kickban
+    // S-308 additions: client(id), user(id), persistence() -> &mut Persistence, max_persist_ttl(), clock(),
+    // dropped_frames(), slow_disconnects() (§6).
 }
+// S-308: free functions router::{apply_max_ttl(max_ttl, &mut Event, &dyn Clock) -> bool, pong_event(&dyn Clock)},
+// const SLOW_CLIENT = "Slow client".
 pub struct CotLogger { /* log_cot dir, file */ }
 impl CotLogger { pub fn on_event(&mut self, user: Option<&TakUser>, addr: Option<IpAddr>, kind: ClientKind, evt: &Event);
                  pub fn on_error(&mut self, elm: &Element, exc: &str); }
+// log_cot contract for the connection task (review-3B N-1; Python logs after route, i.e. after max_ttl):
+// the conn task keeps the original Element, and for each parsed event that is not a ping/empty type/`*-ping` uid it
+// logs a CLONE with router::apply_max_ttl applied (the Router must receive the unmodified Event: the monitor copy is
+// serialized before max_ttl, V047). If serializing the clone fails (D-8) it calls on_error(original elm, ...) as
+// Python's §6 item 9. The conn task mirrors handle_atom (a*, non-monitor, TakUser detail) to pick the file name.
 
 // ===== taky-pki (dev02), used by taky-server/taky-dps/takyctl =====
 pub struct CertDb { /* path, BTreeMap/IndexMap<serial, Record> in file order */ }
@@ -490,7 +522,7 @@ and with feature `testkit` — `Settle{reply}` (barrier behind `HubHandle::settl
 Feature `testkit` (never enabled in release binaries; qa01 A.2): `FakeClock`, `taky_cot::testkit::TestOutbox`,
 `Router::persist_snapshot()`, `Router::find_clients(..)`, `HubHandle::settle()`. Server and DPS start on ready
 listeners: `taky_server::start(ServerOptions, Listeners)`, `taky_dps::start(DpsOptions, TcpListener)` (qa01 A.3).
-(§14 updated after the T-10 review, arch01/handoff/review-T-10.md, and after the 3A review, arch01/handoff/review-3A.md.)
+(§14 updated after the T-10 review, arch01/handoff/review-T-10.md, after the 3A review, arch01/handoff/review-3A.md, and after the 3B review, arch01/handoff/review-3B.md.)
 dev01 tests use `TestOutbox` (VecDeque) — no tokio network.
 
 ---
