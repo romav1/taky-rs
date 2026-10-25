@@ -6,7 +6,9 @@ Run with `python -I -B` (no __pycache__ is written next to anc.py). Usage:
       cert-db.txt with server + JENNY (CertificateDatabase.add_certificate)
   gen_certs.py <anc.py> issue <ca_crt> <ca_key> <out_dir> <name> <server|client>
       one certificate signed by the given CA (e.g. a CA written by taky-rs)
-Used by taky-pki/tests/pyref_x509.rs (S-320).
+  gen_certs.py <anc.py> p12 <ca_crt> <ca_key> <out_dir> <f_name> <hostname> <pw> <server|client> <0|1>
+      make_cert(..., cert_pw=pw, dump_pem=True, key_in_pem=bool(last)) — <f_name>.{crt,key,p12}
+Used by taky-pki/tests/pyref_x509.rs (S-320) and pyref_p12.rs (S-321).
 """
 import configparser
 import importlib.util
@@ -53,6 +55,11 @@ def main(argv):
         anc = load_anc(anc_path, os.path.join(out, "cert-db.txt"))
         anc.make_cert(out, name, name, "atakatak", (ca_crt, ca_key), dump_pem=True,
                       key_in_pem=True, is_server_cert=(kind == "server"))
+    elif mode == "p12":
+        ca_crt, ca_key, out, f_name, host, pw, kind, key = argv[3:11]
+        anc = load_anc(anc_path, os.path.join(out, "cert-db.txt"))
+        anc.make_cert(out, f_name, host, pw, (ca_crt, ca_key), dump_pem=True,
+                      key_in_pem=(key == "1"), is_server_cert=(kind == "server"))
     else:
         raise SystemExit(f"unknown mode {mode}")
     print("ok")

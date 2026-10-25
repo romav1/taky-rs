@@ -11,7 +11,7 @@
 //! Time: the caller passes `now` as naive **UTC** (`Clock::utc_now`); ADR-006 / D-18 "honest
 //! UTC" (Python writes local time as if it were UTC; identical on TZ=UTC hosts).
 //!
-//! PKCS#12 output (`make_cert`'s `.p12`) is S-321; the p12 writer takes [`KeyCert`] from here.
+//! PKCS#12 output (`make_cert`'s `.p12`): [`crate::pkcs12::make_cert_p12`] (S-321).
 
 use std::fs::OpenOptions;
 use std::io::Write;

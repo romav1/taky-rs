@@ -8,6 +8,9 @@ license.workspace = true
 authors.workspace = true
 publish.workspace = true
 
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
 name = "takyctl-rs"
 path = "src/main.rs"
@@ -24,9 +27,12 @@ zip.workspace = true
 uuid.workspace = true
 nix.workspace = true
 tempfile.workspace = true
+thiserror.workspace = true
+chrono.workspace = true
 
 [dev-dependencies]
 assert_cmd.workspace = true
+sha1.workspace = true
 
 [lints]
 workspace = true
