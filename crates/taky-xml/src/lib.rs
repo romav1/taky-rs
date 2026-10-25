@@ -21,3 +21,9 @@ pub use error::XmlError;
 pub use limits::Limits;
 pub use parse::{TreeBuilder, parse_element};
 pub use serialize::{SerOpts, serialize};
+
+/// lxml's check on strings set from code (`elm.set`, `elm.text`): `True` when every character is
+/// an XML `Char`; otherwise lxml raises `ValueError: All strings must be XML compatible`.
+pub fn is_xml_compatible(s: &str) -> bool {
+    chars::first_invalid_char(s).is_none()
+}

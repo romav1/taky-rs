@@ -6,7 +6,11 @@
 //! floats by [`taky_common::pyparse::py_float`] and printed with `%.6f`/`%.1f` (U002).
 //!
 //! S-306: [`Event`], [`Point`], [`Detail`], the parsing side of [`TakUser`]/[`GeoChat`] (needed by
-//! the `<detail>` dispatch). S-307: `to_element` of field-built `TakUser`/`GeoChat`.
+//! the `<detail>` dispatch). S-307: `to_element` of field-built `TakUser`/`GeoChat`/`TakDevice`.
+//!
+//! Building an element from fields fails where Python raises: a required field is `None`
+//! (`ValueError` in `TAKUser.as_element`, lxml `TypeError` for a `None` attribute value) or a
+//! string is not XML-compatible (lxml `ValueError`) — [`SerializeError`].
 
 use std::sync::Arc;
 
@@ -153,6 +157,41 @@ fn is_geochat(tags: &[&str]) -> bool {
         .all(|t| tags.contains(t))
 }
 
+/// `elm.set(k, v)` on an element built in code: `None` is lxml's `TypeError`, a non-XML
+/// character its `ValueError`.
+fn set_attr(e: &mut Element, k: &str, v: Option<&str>) -> Result<(), SerializeError> {
+    let v = v.ok_or_else(|| {
+        SerializeError(format!(
+            "<{}> attribute '{k}': Argument must be bytes or unicode, got 'NoneType'",
+            e.tag
+        ))
+    })?;
+    check_xml(v)?;
+    e.set(k, v);
+    Ok(())
+}
+
+/// lxml's `All strings must be XML compatible` check for strings set from code.
+fn check_xml(v: &str) -> Result<(), SerializeError> {
+    if taky_xml::is_xml_compatible(v) {
+        Ok(())
+    } else {
+        Err(SerializeError(
+            "All strings must be XML compatible: Unicode or ASCII, no NULL bytes or control characters"
+                .into(),
+        ))
+    }
+}
+
+/// An element built from `(name, value)` pairs (`etree.Element(tag, attrib={...})`).
+fn build(tag: &str, attrs: &[(&str, Option<&str>)]) -> Result<Element, SerializeError> {
+    let mut e = Element::new(tag);
+    for (k, v) in attrs {
+        set_attr(&mut e, k, *v)?;
+    }
+    Ok(e)
+}
+
 /// Python `TypeError`/`ValueError` while parsing a child of `<event>`.
 fn child_err(tag: &str) -> UnmarshalError {
     UnmarshalError(format!("Issue parsing {tag}"))
@@ -168,6 +207,22 @@ impl TakDevice {
             device: a("device"),
             platform: a("platform"),
         }
+    }
+
+    /// `TAKDevice.as_element`: `<takv os device version platform>`, a missing value is `""`.
+    pub fn to_element(&self) -> Result<Element, SerializeError> {
+        fn v(x: &Option<String>) -> Option<&str> {
+            Some(x.as_deref().unwrap_or(""))
+        }
+        build(
+            "takv",
+            &[
+                ("os", v(&self.os)),
+                ("device", v(&self.device)),
+                ("version", v(&self.version)),
+                ("platform", v(&self.platform)),
+            ],
+        )
     }
 }
 
@@ -259,13 +314,59 @@ impl TakUser {
         Ok(u)
     }
 
-    /// `TAKUser.as_element` — the original `<detail>` when there is one; objects built from
-    /// fields (`test_takuser.test_as_element`, qa01 testkit request A.4) — S-307.
-    pub fn to_element(&self) -> Element {
-        match &self.elm {
-            Some(e) => e.clone(),
-            None => todo!("S-307: TAKUser.as_element from fields"),
+    /// `TAKUser.as_element` — the original `<detail>` when there is one (parsed from the network);
+    /// otherwise built from fields (`test_takuser.test_as_element`, qa01 testkit request A.4):
+    /// `takv`, `status` (only a non-empty `battery`), `uid Droid=callsign`,
+    /// `contact callsign endpoint [phone] [xmppUsername]` (only non-empty ones),
+    /// `__group role name`, `track course speed` (`%.1f`, only when both are set **and non-zero**:
+    /// Python `if self.course and self.speed`). `callsign`, `group`, `role`, `endpoint` are
+    /// required (`Missing fields, unable to convert to XML element`).
+    pub fn to_element(&self) -> Result<Element, SerializeError> {
+        if let Some(e) = &self.elm {
+            return Ok(e.clone());
         }
+        let (Some(callsign), Some(group), Some(role), Some(endpoint)) = (
+            self.callsign.as_deref(),
+            self.group,
+            self.role.as_deref(),
+            self.endpoint.as_deref(),
+        ) else {
+            return Err(SerializeError(
+                "Missing fields, unable to convert to XML element".into(),
+            ));
+        };
+        let mut detail = Element::new("detail");
+        detail.append(self.device.to_element()?);
+        if let Some(b) = self.battery.as_deref().filter(|b| !b.is_empty()) {
+            detail.append(build("status", &[("battery", Some(b))])?);
+        }
+        detail.append(build("uid", &[("Droid", Some(callsign))])?);
+        let mut contact = build(
+            "contact",
+            &[("callsign", Some(callsign)), ("endpoint", Some(endpoint))],
+        )?;
+        for (k, v) in [("phone", &self.phone), ("xmppUsername", &self.xmpp)] {
+            if let Some(v) = v.as_deref().filter(|v| !v.is_empty()) {
+                set_attr(&mut contact, k, Some(v))?;
+            }
+        }
+        detail.append(contact);
+        detail.append(build(
+            "__group",
+            &[("role", Some(role)), ("name", Some(group.as_str()))],
+        )?);
+        // `bool(float)`: only 0.0 / -0.0 are false (NaN is true).
+        if let (Some(c), Some(s)) = (self.course, self.speed)
+            && c != 0.0
+            && s != 0.0
+        {
+            let (c, s) = (fmt_f1(c), fmt_f1(s));
+            detail.append(build(
+                "track",
+                &[("course", Some(&c)), ("speed", Some(&s))],
+            )?);
+        }
+        Ok(detail)
     }
 
     /// `has_marti` inherited from `Detail` (`False` without an element).
@@ -368,13 +469,70 @@ impl GeoChat {
         Ok(Ok(g))
     }
 
-    /// `GeoChat.as_element` — the original `<detail>` when there is one; objects built from
-    /// fields (`test_router.test_geochat`, qa01 testkit request A.4) — S-307.
-    pub fn to_element(&self) -> Element {
-        match &self.elm {
-            Some(e) => e.clone(),
-            None => todo!("S-307: GeoChat.as_element from fields"),
+    /// `GeoChat.as_element` — the original `<detail>` when there is one (parsed from the
+    /// network); otherwise built from fields (`test_router.test_geochat`, qa01 testkit request
+    /// A.4). The "hacky destination uid" is `All Chat Rooms` for a broadcast, else the team name,
+    /// else `dst_uid`. Every attribute value must be set (`None` ⇒ lxml `TypeError`), as must
+    /// `message_ts`; `message` (the `remarks` text) may be `None`.
+    pub fn to_element(&self) -> Result<Element, SerializeError> {
+        if let Some(e) = &self.elm {
+            return Ok(e.clone());
         }
+        let dst_uid = if self.broadcast() {
+            Some(ALL_CHAT_ROOMS)
+        } else if let Some(t) = self.dst_team {
+            Some(t.as_str())
+        } else {
+            self.dst_uid.as_deref()
+        };
+        let src_uid = self.src_uid.as_deref();
+        let mut detail = Element::new("detail");
+        let mut chat = build(
+            "__chat",
+            &[
+                ("parent", self.chat_parent.as_deref()),
+                (
+                    "groupOwner",
+                    Some(if self.group_owner { "true" } else { "false" }),
+                ),
+                ("chatroom", self.chatroom.as_deref()),
+                ("id", dst_uid),
+                ("senderCallsign", self.src_cs.as_deref()),
+            ],
+        )?;
+        chat.append(build(
+            "chatgrp",
+            &[("uid0", src_uid), ("uid1", dst_uid), ("id", dst_uid)],
+        )?);
+        detail.append(chat);
+        detail.append(build(
+            "link",
+            &[
+                ("uid", src_uid),
+                ("type", self.src_marker.as_deref()),
+                ("relation", Some("p-p")),
+            ],
+        )?);
+        // f-string: `None` would print as "None", but `src_uid` was already required above.
+        let source = format!("BAO.F.ATAK.{}", src_uid.unwrap_or("None"));
+        let ts = self.message_ts.ok_or_else(|| {
+            SerializeError("'NoneType' object has no attribute 'isoformat'".into())
+        })?;
+        let time = format!("{}Z", isoformat_ms(ts));
+        let mut remarks = build(
+            "remarks",
+            &[
+                ("source", Some(&source)),
+                ("to", dst_uid),
+                ("time", Some(&time)),
+            ],
+        )?;
+        if let Some(m) = &self.message {
+            check_xml(m)?;
+            remarks.text = Some(m.clone());
+        }
+        detail.append(remarks);
+        Ok(detail)
     }
 
     /// `has_marti` inherited from `Detail` (`False` without an element).
@@ -490,12 +648,13 @@ impl EventDetail {
         }
     }
 
-    /// `detail.as_element` (the original element for parsed details).
-    pub fn to_element(&self) -> Element {
+    /// `detail.as_element` (the original element for parsed details; field-built
+    /// `TakUser`/`GeoChat` may fail, see their `to_element`).
+    pub fn to_element(&self) -> Result<Element, SerializeError> {
         match self {
             EventDetail::GeoChat(g) => g.to_element(),
             EventDetail::TakUser(u) => u.to_element(),
-            EventDetail::Plain(d) => d.elm.clone(),
+            EventDetail::Plain(d) => Ok(d.elm.clone()),
         }
     }
 
@@ -593,7 +752,9 @@ impl Event {
     /// The parsed `<detail>` is appended as lxml moves it into the new tree: its namespace
     /// declarations are reconciled ([`Element::reconcile_moved_ns`]) and its **tail is kept**
     /// (`<detail>…</detail>\n</event>` is real output).
-    pub fn to_element(&self) -> Element {
+    ///
+    /// Fails only for a field-built detail that cannot be serialized ([`EventDetail::to_element`]).
+    pub fn to_element(&self) -> Result<Element, SerializeError> {
         let mut e = Element::new("event");
         for (k, v) in [
             ("version", &self.version),
@@ -610,11 +771,11 @@ impl Event {
         e.set("stale", format!("{}Z", isoformat_ms(self.stale)));
         e.append(self.point.to_element());
         if let Some(d) = &self.detail {
-            let mut d = d.to_element();
+            let mut d = d.to_element()?;
             d.reconcile_moved_ns();
             e.append(d);
         }
-        e
+        Ok(e)
     }
 
     /// `etree.tostring(self.as_element)` as a shared [`Frame`].
@@ -632,7 +793,7 @@ impl Event {
                 return Err(SerializeError(format!("event has no '{k}' attribute")));
             }
         }
-        Ok(taky_xml::serialize(&self.to_element(), &SerOpts::default()).into())
+        Ok(taky_xml::serialize(&self.to_element()?, &SerOpts::default()).into())
     }
 
     /// `Event.persist_ttl`: `round((stale - utcnow()).total_seconds())` (half-even),

@@ -68,7 +68,7 @@ fn test_unmarshall() {
 #[test]
 fn test_marshall() {
     let event = Event::from_element(&parse(XML_S)).unwrap();
-    elements_equal(&parse(XML_S), &event.to_element());
+    elements_equal(&parse(XML_S), &event.to_element().unwrap());
     // Stronger than the original: byte-exact wire form.
     assert_eq!(&*event.to_frame().unwrap(), XML_S.as_bytes());
 }
@@ -162,7 +162,7 @@ fn missing_version_or_how_d8() {
     assert_eq!((evt.version.as_deref(), evt.how.as_deref()), (None, None));
     assert!(evt.to_frame().is_err());
     // to_element omits the absent attributes.
-    let out = serialize(&evt.to_element(), &SerOpts::default());
+    let out = serialize(&evt.to_element().unwrap(), &SerOpts::default());
     assert!(out.starts_with(b"<event uid=\"ANDROID-deadbeef\" type=\"a-f-G-U-C\" time="));
 }
 

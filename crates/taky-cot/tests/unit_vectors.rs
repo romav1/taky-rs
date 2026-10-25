@@ -52,7 +52,7 @@ fn u001_isoparse() {
                 );
                 let cot = exp["cot"].as_str().unwrap();
                 assert_eq!(format!("{}Z", isoformat_ms(t)), cot, "{input:?}");
-                let elm = evt.unwrap().to_element();
+                let elm = evt.unwrap().to_element().unwrap();
                 assert_eq!(elm.get("time"), Some(cot), "{input:?}");
             }
             None => {
