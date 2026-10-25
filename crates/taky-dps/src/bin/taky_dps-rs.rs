@@ -1,8 +1,8 @@
 //! `taky_dps-rs` — Data Package Server binary (Python: `taky_dps = taky.dps.__main__:main`,
 //! spec dps-cli-config §2.1).
 //!
-//! Status: S-316 — config, bind (8443/8080), serve until SIGINT/SIGTERM, `DONE`.
-//! Logging is not initialised yet: `taky_common::log::init` is still `todo!()` (dev01, T-20).
+//! Config, bind (8443/8080), serve until SIGINT/SIGTERM, `DONE`; Python `logging` format on
+//! stderr (`-l`, `RUST_LOG`), gunicorn-style access log on stdout.
 
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -14,6 +14,13 @@ fn main() -> ExitCode {
     let args = cli::parse();
     let argv0 = std::env::args().next();
     let prog = taky_common::prog_name(argv0.as_deref(), cli::DEFAULT_PROG).to_owned();
+    // __main__.py:128 `logging.basicConfig(level=args.log_level.upper(), stream=sys.stderr)`,
+    // before the config is loaded.
+    if let Err(e) = taky_common::log::init(args.level()) {
+        eprintln!("{prog}: {e}");
+    }
+    // gunicorn `accesslog="-"` and the views' `print()`s.
+    taky_dps::set_stdout_output(true);
 
     // __main__.py:131-139: TAKY_CONFIG or -c ⇒ explicit; otherwise the default lookup.
     let path = args.config_path(std::env::var_os(cli::ENV_TAKY_CONFIG));

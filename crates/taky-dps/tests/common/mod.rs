@@ -694,7 +694,10 @@ fn check(ctx: &str, exp: &Value, r: &HttpResponse, upload_path: &str) {
         assert_eq!(r.body, b64_decode(b), "{ctx}: body_b64");
     }
     if let Some(j) = exp.get("body_json") {
-        let got = norm_json(&serde_json::from_slice(&r.body).expect("json body"));
+        // `$VERSION` placeholder as in `body` (the version string has no JSON-special chars).
+        let raw =
+            String::from_utf8_lossy(&r.body).replace(&taky_dps::version_string(), "taky-$VERSION");
+        let got = norm_json(&serde_json::from_str(&raw).expect("json body"));
         assert_eq!(&got, j, "{ctx}: body_json");
         assert!(r.body.ends_with(b"\n"), "{ctx}: jsonify trailing newline");
     }

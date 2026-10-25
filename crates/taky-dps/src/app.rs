@@ -18,8 +18,8 @@ use axum::routing::{MethodRouter, get, post, put};
 use serde_json::{Value, json};
 use taky_common::SharedClock;
 
-use crate::datapackage;
 use crate::storage::Store;
+use crate::{datapackage, kml, video};
 
 /// Flask's default content type for `str` responses and framework error pages.
 pub const TEXT_HTML: &str = "text/html; charset=utf-8";
@@ -237,11 +237,6 @@ async fn client_endpoints(_auth: RequireAuth, State(s): St) -> Response {
     }))
 }
 
-/// Placeholder for the endpoints of S-318 (auth is checked first, as in the original).
-async fn not_implemented(_auth: RequireAuth) -> Response {
-    text(StatusCode::NOT_IMPLEMENTED, "Not implemented")
-}
-
 fn handlers(pat: &str, m: &str) -> MethodRouter<Arc<AppState>> {
     match (pat, m) {
         ("/", _) => get(index),
@@ -259,9 +254,13 @@ fn handlers(pat: &str, m: &str) -> MethodRouter<Arc<AppState>> {
         ("/Marti/api/sync/metadata/{hash}/tool", _) => {
             put(datapackage::metadata_tool).layer(DefaultBodyLimit::disable())
         }
-        (_, "POST") => post(not_implemented),
-        (_, "PUT") => put(not_implemented),
-        _ => get(not_implemented),
+        ("/Marti/TracksKML", _) => post(kml::tracks_kml).layer(DefaultBodyLimit::disable()),
+        ("/Marti/ExportMissionKML", _) => get(kml::export_mission_kml),
+        // The body is read with an explicit cap in the handler (oversized ⇒ `Malformed XML`).
+        ("/Marti/vcm", "POST") => post(video::upload).layer(DefaultBodyLimit::disable()),
+        ("/Marti/vcm", _) => get(video::index),
+        // Unreachable: every (rule, method) of ROUTES is matched above (D015 covers 405s).
+        _ => MethodRouter::new(),
     }
 }
 

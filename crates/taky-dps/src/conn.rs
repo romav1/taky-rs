@@ -69,13 +69,18 @@ impl Ctx {
                 "https"
             }
         };
-        match pre_route(req, scheme) {
+        let access = crate::stdout_enabled().then(|| AccessInfo::of(&req));
+        let resp = match pre_route(req, scheme) {
             Err(resp) => *resp,
             Ok(req) => match self.router.clone().oneshot(req).await {
                 Ok(r) => r,
                 Err(e) => match e {},
             },
+        };
+        if let Some(a) = access {
+            crate::stdout_line(&a.line(&resp));
         }
+        resp
     }
 
     /// Serve one accepted stream (TLS handshake first in TLS mode).
@@ -144,6 +149,61 @@ impl Ctx {
     }
 }
 
+/// Request data for the gunicorn access log line (`accesslog="-"`,
+/// `access_log_format='%(t)s "%(r)s" %(s)s %(b)s "%(a)s"'`, spec §2.1).
+struct AccessInfo {
+    head: bool,
+    /// `%(r)s` = `REQUEST_METHOD RAW_URI SERVER_PROTOCOL`.
+    request_line: String,
+    /// `%(a)s` = `User-Agent` or `-`.
+    agent: String,
+}
+
+impl AccessInfo {
+    fn of<B>(req: &Request<B>) -> AccessInfo {
+        let target = req
+            .uri()
+            .path_and_query()
+            .map_or_else(|| req.uri().to_string(), |pq| pq.as_str().to_owned());
+        let agent = req
+            .headers()
+            .get(axum::http::header::USER_AGENT)
+            .map_or_else(
+                || "-".to_owned(),
+                |v| String::from_utf8_lossy(v.as_bytes()).into_owned(),
+            );
+        AccessInfo {
+            head: req.method() == axum::http::Method::HEAD,
+            request_line: format!("{} {target} {:?}", req.method(), req.version()),
+            agent,
+        }
+    }
+
+    /// `%(t)s` = `[%d/%b/%Y:%H:%M:%S %z]` (local time), `%(b)s` = body bytes sent
+    /// (`0` for HEAD; `-` when unknown, i.e. a stream without a length).
+    fn line(&self, resp: &Response) -> String {
+        use axum::body::HttpBody as _;
+        let t = chrono::Local::now().format("[%d/%b/%Y:%H:%M:%S %z]");
+        let sent = if self.head {
+            Some(0)
+        } else {
+            resp.body().size_hint().exact().or_else(|| {
+                resp.headers()
+                    .get(axum::http::header::CONTENT_LENGTH)
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.parse().ok())
+            })
+        };
+        let b = sent.map_or_else(|| "-".to_owned(), |n: u64| n.to_string());
+        format!(
+            "{t} \"{}\" {} {b} \"{}\"",
+            self.request_line,
+            resp.status().as_u16(),
+            self.agent
+        )
+    }
+}
+
 /// Accept until `shutdown`, then wait (≤ 30 s) for open connections to finish.
 pub(crate) async fn accept_loop(
     listener: TcpListener,
@@ -176,4 +236,41 @@ pub(crate) async fn accept_loop(
         tracing::warn!("DPS: connections still open after {SHUTDOWN_GRACE:?}, exiting");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::StatusCode;
+    use axum::response::IntoResponse;
+
+    #[test]
+    fn gunicorn_access_line() {
+        let req = Request::builder()
+            .method("GET")
+            .uri("/Marti/sync/search?keywords=a%20b")
+            .header("user-agent", "ATAK")
+            .body(())
+            .unwrap();
+        let a = AccessInfo::of(&req);
+        let line = a.line(&(StatusCode::OK, "hello").into_response());
+        let (t, rest) = line.split_at(line.find("] ").unwrap() + 2);
+        assert!(t.starts_with('[') && t.len() == 29, "{t}");
+        assert_eq!(
+            rest,
+            "\"GET /Marti/sync/search?keywords=a%20b HTTP/1.1\" 200 5 \"ATAK\""
+        );
+
+        let req = Request::builder().method("HEAD").uri("/").body(()).unwrap();
+        let line = AccessInfo::of(&req).line(&(StatusCode::OK, "x").into_response());
+        assert!(line.ends_with("\"HEAD / HTTP/1.1\" 200 0 \"-\""), "{line}");
+
+        let req = Request::builder().uri("/x").body(()).unwrap();
+        let stream = Response::new(Body::from_stream(tokio_util::io::ReaderStream::new(
+            tokio::io::empty(),
+        )));
+        let line = AccessInfo::of(&req).line(&stream);
+        assert!(line.ends_with("\"GET /x HTTP/1.1\" 200 - \"-\""), "{line}");
+    }
 }

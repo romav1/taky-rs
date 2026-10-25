@@ -8,19 +8,23 @@
 //!
 //! Status: S-316 — accept loop, TLS identity, G-6 plain-mode policy, routing/404/405,
 //! `/`, `/Marti/api/version[/config]`, `/Marti/api/clientEndPoints`; S-317 — storage
-//! ([`storage`]), search, content, missionupload, metadata tool, missionquery. KML and vcm answer
-//! `501` after auth until S-318.
+//! ([`storage`]), search, content, missionupload, metadata tool, missionquery; S-318 — KML stubs,
+//! video feeds (`/Marti/vcm`, taky-xml, D-1), gunicorn-style access log on stdout.
 
 pub mod app;
 pub mod cli;
 mod conn;
 mod datapackage;
 pub mod identity;
+mod kml;
 pub mod mimetypes;
 pub mod storage;
+mod video;
 mod werkzeug;
 
+use std::io::Write as _;
 use std::net::{IpAddr, SocketAddr};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
@@ -32,6 +36,28 @@ use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 
 pub use app::{RequireAuth, version_string};
+
+/// Process-wide switch for what the original writes to stdout: the gunicorn access log
+/// (`accesslog="-"`) and the `print()`s of `/Marti/TracksKML`. Off by default so that library
+/// users and tests stay quiet; the `taky_dps-rs` binary turns it on.
+static STDOUT: AtomicBool = AtomicBool::new(false);
+
+/// Enable (or disable) the stdout output described at [`STDOUT`].
+pub fn set_stdout_output(on: bool) {
+    STDOUT.store(on, Ordering::Relaxed);
+}
+
+pub(crate) fn stdout_enabled() -> bool {
+    STDOUT.load(Ordering::Relaxed)
+}
+
+/// One line (or several, joined by `\n`) to stdout, written in one locked call; errors (closed
+/// stdout) are ignored like a broken log stream.
+pub(crate) fn stdout_line(s: &str) {
+    let mut out = std::io::stdout().lock();
+    let _ = writeln!(out, "{s}");
+    let _ = out.flush();
+}
 
 /// Everything DPS needs besides the socket.
 #[derive(Debug, Clone)]
