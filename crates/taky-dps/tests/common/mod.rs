@@ -8,6 +8,11 @@
 //! * `remote_addr` (non-loopback) ⇒ the stream is served via `DpsApp::serve_connection` over an
 //!   in-memory duplex with that peer address; otherwise a real TCP connection from 127.0.0.1.
 //! * `exp = rust_expect ?? expect`, `final = final_rust_expect ?? final_expect`.
+//! * `multipart` is encoded like the Werkzeug test client (raw UTF-8 `filename="…"`, part
+//!   Content-Type = given ?? `mimetypes.guess_type(filename)` ?? `application/octet-stream`).
+//! * `upload_path/meta` is pre-created (as `takyctl setup` and the Python runner do); final files
+//!   are compared as the full snapshot of `upload_path` (Python `snapshot_files`), with
+//!   `SubmissionDateTime` values normalized to `$TIMESTAMP`; `$UPLOAD_PATH` in bodies.
 #![allow(dead_code)]
 
 use std::collections::HashMap;
@@ -274,7 +279,7 @@ impl Harness {
         let dir = tempfile::tempdir().expect("tmp");
         let root = dir.path().canonicalize().expect("canon");
         let upload_path = root.join("dp-user");
-        std::fs::create_dir_all(&upload_path).expect("mkdir");
+        std::fs::create_dir_all(upload_path.join("meta")).expect("mkdir");
         let cert_db = root.join("cert-db.txt");
         let mut sections: Vec<(String, Vec<(String, String)>)> = Vec::new();
         let mut set = |s: &str, k: &str, v: &str| {
@@ -463,10 +468,6 @@ pub async fn run_vector(rel: &str) {
     }
     for (i, step) in vec["steps"].as_array().expect("steps").iter().enumerate() {
         let r = &step["request"];
-        assert!(
-            r.get("multipart").is_none(),
-            "{id}: multipart not supported yet (S-317)"
-        );
         let mut target = r["path"].as_str().expect("path").to_owned();
         if let Some(q) = r["query"].as_object() {
             let qs: Vec<String> = q
@@ -477,7 +478,7 @@ pub async fn run_vector(rel: &str) {
                 target = format!("{target}?{}", qs.join("&"));
             }
         }
-        let headers = r["headers"]
+        let mut headers: Vec<(String, String)> = r["headers"]
             .as_object()
             .map(|m| {
                 m.iter()
@@ -485,12 +486,18 @@ pub async fn run_vector(rel: &str) {
                     .collect()
             })
             .unwrap_or_default();
+        let mut body = str_field(r, "body").unwrap_or("").as_bytes().to_vec();
+        if let Some(parts) = r["multipart"].as_array() {
+            let (ct, b) = encode_multipart(parts);
+            headers.push(("Content-Type".into(), ct));
+            body = b;
+        }
         let req = HttpRequest {
             method: r["method"].as_str().expect("method").to_owned(),
             target,
             host: host.clone(),
             headers,
-            body: str_field(r, "body").unwrap_or("").as_bytes().to_vec(),
+            body,
         };
         let identity = r["identity"].as_object().map(|o| {
             (
@@ -507,18 +514,167 @@ pub async fn run_vector(rel: &str) {
             )
             .await;
         let exp = step.get("rust_expect").unwrap_or(&step["expect"]);
-        check(&format!("{id} step {}", i + 1), exp, &resp);
+        let up = h.upload_path.to_str().expect("utf8").to_owned();
+        check(&format!("{id} step {}", i + 1), exp, &resp, &up);
     }
     let fin = vec.get("final_rust_expect").unwrap_or(&vec["final_expect"]);
-    if let Some(files) = fin["files"].as_object() {
-        for (rel_path, spec) in files {
-            check_file(&id, &h.upload_path, rel_path, spec);
-        }
+    if let Some(files) = fin.get("files") {
+        let got = snapshot_files(&h.upload_path);
+        assert_eq!(
+            &got, files,
+            "{id}: final files (full snapshot of upload_path)"
+        );
     }
     h.stop().await;
 }
 
-fn check(ctx: &str, exp: &Value, r: &HttpResponse) {
+/// Werkzeug test client multipart encoding (`stream_encode_multipart`).
+pub fn encode_multipart(parts: &[Value]) -> (String, Vec<u8>) {
+    let boundary = "---------------WerkzeugFormPart_1761400000.1234567";
+    let mut b = Vec::new();
+    for p in parts {
+        let name = p["name"].as_str().expect("name");
+        let filename = p["filename"].as_str().expect("filename");
+        let data = match str_field(p, "data_b64") {
+            Some(x) => b64_decode(x),
+            None => p["data"].as_str().expect("data").as_bytes().to_vec(),
+        };
+        let ct = match str_field(p, "content_type") {
+            Some(c) => c.to_owned(),
+            None => taky_dps::mimetypes::guess_type(filename)
+                .ok()
+                .and_then(|t| t.0)
+                .unwrap_or_else(|| "application/octet-stream".into()),
+        };
+        b.extend_from_slice(format!("--{boundary}\r\n").as_bytes());
+        b.extend_from_slice(
+            format!(
+                "Content-Disposition: form-data; name=\"{name}\"; filename=\"{filename}\"\r\nContent-Type: {ct}\r\n\r\n"
+            )
+            .as_bytes(),
+        );
+        b.extend_from_slice(&data);
+        b.extend_from_slice(b"\r\n");
+    }
+    b.extend_from_slice(format!("--{boundary}--\r\n").as_bytes());
+    (format!("multipart/form-data; boundary={boundary}"), b)
+}
+
+pub fn b64_decode(s: &str) -> Vec<u8> {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = Vec::new();
+    let mut acc = 0u32;
+    let mut n = 0;
+    for c in s.bytes().filter(|c| *c != b'=' && !c.is_ascii_whitespace()) {
+        let v = T.iter().position(|t| *t == c).expect("base64") as u32;
+        acc = (acc << 6) | v;
+        n += 6;
+        if n >= 8 {
+            n -= 8;
+            out.push((acc >> n) as u8);
+            acc &= (1 << n) - 1;
+        }
+    }
+    out
+}
+
+pub fn b64_encode(der: &[u8]) -> String {
+    pem_wrap("X", der)
+        .lines()
+        .filter(|l| !l.starts_with("-----"))
+        .collect()
+}
+
+/// `("SubmissionDateTime": ?")[^"]*(")` ⇒ `$TIMESTAMP` (Python runner `norm_text`).
+pub fn norm_text(s: &str) -> String {
+    let mut out = String::new();
+    let mut rest = s;
+    while let Some(i) = rest.find("\"SubmissionDateTime\":") {
+        let after = i + "\"SubmissionDateTime\":".len();
+        let (sp, val_start) = if rest[after..].starts_with(" \"") {
+            (true, after + 2)
+        } else if rest[after..].starts_with('"') {
+            (false, after + 1)
+        } else {
+            out.push_str(&rest[..after]);
+            rest = &rest[after..];
+            continue;
+        };
+        let Some(end) = rest[val_start..].find('"') else {
+            break;
+        };
+        out.push_str(&rest[..i]);
+        out.push_str(if sp {
+            "\"SubmissionDateTime\": \"$TIMESTAMP\""
+        } else {
+            "\"SubmissionDateTime\":\"$TIMESTAMP\""
+        });
+        rest = &rest[val_start + end + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Python runner `norm_json`.
+pub fn norm_json(v: &Value) -> Value {
+    match v {
+        Value::Object(m) => Value::Object(
+            m.iter()
+                .map(|(k, x)| {
+                    let x = if k == "SubmissionDateTime" {
+                        Value::from("$TIMESTAMP")
+                    } else {
+                        norm_json(x)
+                    };
+                    (k.clone(), x)
+                })
+                .collect(),
+        ),
+        Value::Array(a) => Value::Array(a.iter().map(norm_json).collect()),
+        x => x.clone(),
+    }
+}
+
+/// Python runner `snapshot_files`: every file and symlink under `root` (symlinked directories as
+/// links, not descended), `{rel: {"content"|"content_b64"|"symlink_to": …}}`.
+pub fn snapshot_files(root: &Path) -> Value {
+    fn walk(root: &Path, dir: &Path, out: &mut serde_json::Map<String, Value>) {
+        for e in std::fs::read_dir(dir).expect("read_dir") {
+            let e = e.expect("entry");
+            let p = e.path();
+            let rel = p
+                .strip_prefix(root)
+                .expect("rel")
+                .to_str()
+                .expect("utf8")
+                .to_owned();
+            let ft = std::fs::symlink_metadata(&p).expect("lstat").file_type();
+            if ft.is_symlink() {
+                let t = std::fs::read_link(&p).expect("readlink");
+                out.insert(
+                    rel,
+                    serde_json::json!({"symlink_to": t.to_str().expect("utf8")}),
+                );
+            } else if ft.is_dir() {
+                walk(root, &p, out);
+            } else {
+                let data = std::fs::read(&p).expect("read");
+                let v = match String::from_utf8(data) {
+                    Ok(t) => serde_json::json!({"content": norm_text(&t)}),
+                    Err(e) => serde_json::json!({"content_b64": b64_encode(e.as_bytes())}),
+                };
+                out.insert(rel, v);
+            }
+        }
+    }
+    let mut m = serde_json::Map::new();
+    walk(root, root, &mut m);
+    let mut entries: Vec<(String, Value)> = m.into_iter().collect();
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+    Value::Object(entries.into_iter().collect())
+}
+
+fn check(ctx: &str, exp: &Value, r: &HttpResponse, upload_path: &str) {
     assert_eq!(
         Some(u64::from(r.status)),
         exp["status"].as_u64(),
@@ -529,12 +685,16 @@ fn check(ctx: &str, exp: &Value, r: &HttpResponse) {
         assert_eq!(r.header("content-type"), Some(ct), "{ctx}: content type");
     }
     if let Some(b) = str_field(exp, "body") {
-        let got =
-            String::from_utf8_lossy(&r.body).replace(&taky_dps::version_string(), "taky-$VERSION");
+        let got = String::from_utf8_lossy(&r.body)
+            .replace(&taky_dps::version_string(), "taky-$VERSION")
+            .replace(upload_path, "$UPLOAD_PATH");
         assert_eq!(got, b, "{ctx}: body");
     }
+    if let Some(b) = str_field(exp, "body_b64") {
+        assert_eq!(r.body, b64_decode(b), "{ctx}: body_b64");
+    }
     if let Some(j) = exp.get("body_json") {
-        let got: Value = serde_json::from_slice(&r.body).expect("json body");
+        let got = norm_json(&serde_json::from_slice(&r.body).expect("json body"));
         assert_eq!(&got, j, "{ctx}: body_json");
         assert!(r.body.ends_with(b"\n"), "{ctx}: jsonify trailing newline");
     }
@@ -560,18 +720,9 @@ fn write_file(root: &Path, rel: &str, spec: &Value) {
         std::os::unix::fs::symlink(t, &p).expect("symlink");
     } else if let Some(c) = str_field(spec, "content") {
         std::fs::write(&p, c).expect("write");
+    } else if let Some(c) = str_field(spec, "content_b64") {
+        std::fs::write(&p, b64_decode(c)).expect("write");
     } else {
         panic!("unsupported initial file spec {spec}");
-    }
-}
-
-fn check_file(id: &str, root: &Path, rel: &str, spec: &Value) {
-    let p = root.join(rel);
-    if let Some(t) = str_field(spec, "symlink_to") {
-        let got = std::fs::read_link(&p).expect("readlink");
-        assert_eq!(got, Path::new(t), "{id}: symlink {rel}");
-    } else if let Some(c) = str_field(spec, "content") {
-        let got = std::fs::read_to_string(&p).expect("read");
-        assert_eq!(got, c, "{id}: file {rel}");
     }
 }

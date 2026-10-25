@@ -7,13 +7,18 @@
 //! `SubmissionDateTime`.
 //!
 //! Status: S-316 — accept loop, TLS identity, G-6 plain-mode policy, routing/404/405,
-//! `/`, `/Marti/api/version[/config]`, `/Marti/api/clientEndPoints`. Other endpoints answer
-//! `501` after auth until S-317/S-318.
+//! `/`, `/Marti/api/version[/config]`, `/Marti/api/clientEndPoints`; S-317 — storage
+//! ([`storage`]), search, content, missionupload, metadata tool, missionquery. KML and vcm answer
+//! `501` after auth until S-318.
 
 pub mod app;
 pub mod cli;
 mod conn;
+mod datapackage;
 pub mod identity;
+pub mod mimetypes;
+pub mod storage;
+mod werkzeug;
 
 use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
@@ -101,7 +106,10 @@ impl DpsApp {
             hostname: cfg.taky.hostname.clone(),
             node_id: cfg.taky.node_id.clone(),
             cot_conn_str: format!("{scheme}:{}:{}", cfg.taky.hostname, cfg.cot_server.port),
-            upload_path: cfg.dp_server.upload_path.clone(),
+            tls: cfg.ssl.enabled,
+            store: storage::Store {
+                root: cfg.dp_server.upload_path.clone(),
+            },
             clock: opts.clock.clone(),
         };
         let (tls, certdb) = if cfg.ssl.enabled {

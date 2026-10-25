@@ -5,10 +5,10 @@
 //! axum does not have: `Allow` on 405, automatic `OPTIONS`, leading-slash stripping and the
 //! merge-slashes 308 redirect ([`pre_route`]).
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use axum::Router;
+use axum::extract::DefaultBodyLimit;
 use axum::extract::{FromRequestParts, State};
 use axum::http::header::{ALLOW, CONTENT_TYPE, HOST, LOCATION};
 use axum::http::request::Parts;
@@ -17,6 +17,9 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{MethodRouter, get, post, put};
 use serde_json::{Value, json};
 use taky_common::SharedClock;
+
+use crate::datapackage;
+use crate::storage::Store;
 
 /// Flask's default content type for `str` responses and framework error pages.
 pub const TEXT_HTML: &str = "text/html; charset=utf-8";
@@ -33,11 +36,11 @@ pub(crate) struct AppState {
     pub node_id: String,
     /// `ssl:<hostname>:<cot port>` or `tcp:<hostname>:<cot port>`.
     pub cot_conn_str: String,
-    /// `dp_server.upload_path` (S-317).
-    #[allow(dead_code)]
-    pub upload_path: PathBuf,
-    /// Clock for `SubmissionDateTime` (S-317).
-    #[allow(dead_code)]
+    /// `true` with `ssl.enabled` (`request.host_url` scheme).
+    pub tls: bool,
+    /// `dp_server.upload_path`.
+    pub store: Store,
+    /// Clock for `SubmissionDateTime`.
     pub clock: SharedClock,
 }
 
@@ -122,6 +125,18 @@ pub(crate) fn error_page(status: StatusCode) -> Response {
             "Method Not Allowed",
             "The method is not allowed for the requested URL.",
         ),
+        StatusCode::BAD_REQUEST => (
+            "Bad Request",
+            "The browser (or proxy) sent a request that this server could not understand.",
+        ),
+        StatusCode::PAYLOAD_TOO_LARGE => (
+            "Request Entity Too Large",
+            "The data value transmitted exceeds the capacity limit.",
+        ),
+        StatusCode::RANGE_NOT_SATISFIABLE => (
+            "Requested Range Not Satisfiable",
+            "The server cannot provide the requested range.",
+        ),
         _ => (
             "Internal Server Error",
             "The server encountered an internal error and was unable to complete your request. \
@@ -154,71 +169,10 @@ fn auto_options(allow: &str) -> Response {
 }
 
 /// Flask 2.x `jsonify` of a dict: `application/json`, sorted keys, compact separators,
-/// `ensure_ascii`, trailing `\n`.
-// TODO(dev02): switch to `taky_common::pyjson::dumps` once T-21 implements it (still todo!()).
+/// `ensure_ascii`, trailing `\n` (`taky_common::pyjson`, T-21).
 pub(crate) fn jsonify(v: &Value) -> Response {
-    let mut s = String::new();
-    write_json(v, &mut s);
-    s.push('\n');
+    let s = taky_common::pyjson::jsonify(v);
     (StatusCode::OK, [(CONTENT_TYPE, "application/json")], s).into_response()
-}
-
-fn write_json(v: &Value, out: &mut String) {
-    match v {
-        Value::Null => out.push_str("null"),
-        Value::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
-        Value::Number(n) => out.push_str(&n.to_string()),
-        Value::String(s) => write_json_str(s, out),
-        Value::Array(a) => {
-            out.push('[');
-            for (i, x) in a.iter().enumerate() {
-                if i > 0 {
-                    out.push(',');
-                }
-                write_json(x, out);
-            }
-            out.push(']');
-        }
-        Value::Object(m) => {
-            let mut keys: Vec<&String> = m.keys().collect();
-            keys.sort();
-            out.push('{');
-            for (i, k) in keys.into_iter().enumerate() {
-                if i > 0 {
-                    out.push(',');
-                }
-                write_json_str(k, out);
-                out.push(':');
-                if let Some(x) = m.get(k) {
-                    write_json(x, out);
-                }
-            }
-            out.push('}');
-        }
-    }
-}
-
-fn write_json_str(s: &str, out: &mut String) {
-    out.push('"');
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            '\u{8}' => out.push_str("\\b"),
-            '\u{c}' => out.push_str("\\f"),
-            c if (c as u32) < 0x20 || (c as u32) > 0x7e => {
-                let mut buf = [0u16; 2];
-                for u in c.encode_utf16(&mut buf) {
-                    out.push_str(&format!("\\u{u:04x}"));
-                }
-            }
-            c => out.push(c),
-        }
-    }
-    out.push('"');
 }
 
 /// `@requires_auth`: decided **only from headers** (one code path for TLS and plain mode; the
@@ -283,7 +237,7 @@ async fn client_endpoints(_auth: RequireAuth, State(s): St) -> Response {
     }))
 }
 
-/// Placeholder for the endpoints of S-317/S-318 (auth is checked first, as in the original).
+/// Placeholder for the endpoints of S-318 (auth is checked first, as in the original).
 async fn not_implemented(_auth: RequireAuth) -> Response {
     text(StatusCode::NOT_IMPLEMENTED, "Not implemented")
 }
@@ -294,6 +248,17 @@ fn handlers(pat: &str, m: &str) -> MethodRouter<Arc<AppState>> {
         ("/Marti/api/version", _) => get(version),
         ("/Marti/api/version/config", _) => get(version_config),
         ("/Marti/api/clientEndPoints", _) => get(client_endpoints),
+        ("/Marti/sync/search", _) => get(datapackage::search),
+        ("/Marti/sync/content", _) => get(datapackage::content),
+        ("/Marti/sync/missionquery", _) => get(datapackage::missionquery),
+        // Flask has no request size limit (MAX_CONTENT_LENGTH unset); the upload is streamed
+        // to a temp file, the tool body is read whole (as `request.get_data()`).
+        ("/Marti/sync/missionupload", _) => {
+            post(datapackage::upload).layer(DefaultBodyLimit::disable())
+        }
+        ("/Marti/api/sync/metadata/{hash}/tool", _) => {
+            put(datapackage::metadata_tool).layer(DefaultBodyLimit::disable())
+        }
         (_, "POST") => post(not_implemented),
         (_, "PUT") => put(not_implemented),
         _ => get(not_implemented),
@@ -398,17 +363,6 @@ fn html_escape(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn jsonify_like_flask() {
-        let v = json!({"b": 1, "a": "\u{fc}\n\u{1f600}\u{7f}", "c": [true, null]});
-        let mut s = String::new();
-        write_json(&v, &mut s);
-        assert_eq!(
-            s,
-            "{\"a\":\"\\u00fc\\n\\ud83d\\ude00\\u007f\",\"b\":1,\"c\":[true,null]}"
-        );
-    }
 
     #[test]
     fn allow_and_route_table() {
