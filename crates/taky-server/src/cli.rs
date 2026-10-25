@@ -4,10 +4,11 @@
 //! of `argv[0]`, as in argparse.
 
 use std::ffi::OsString;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::{ArgAction, CommandFactory, FromArgMatches, Parser};
 use taky_common::log::PyLevel;
+use taky_config::ConfigError;
 
 /// Program name used when `argv[0]` is unavailable.
 pub const DEFAULT_PROG: &str = "taky-rs";
@@ -77,9 +78,86 @@ pub fn parse() -> Args {
     try_parse_from(std::env::args_os()).unwrap_or_else(|e| e.exit())
 }
 
+/// How `taky-rs` reports a `load_config` failure (`__main__.py:73-85`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfigFailure {
+    /// `FileNotFoundError`/`OSError` → `argp.error(msg)`: usage + `<prog>: error: <msg>` on
+    /// stderr, exit 2.
+    Usage(String),
+    /// `configparser.ParsingError` → `Configuration file error: <exc>` on stderr, exit 1. Every
+    /// other error (Python `ValueError`, `Duplicate*Error`, interpolation errors: a traceback,
+    /// exit 1) gets the same readable line and exit code (D-13, OQ-02).
+    Config(String),
+}
+
+impl ConfigFailure {
+    /// Classify `err` for the `-c` value `cfg_file` (as typed on the command line).
+    pub fn classify(cfg_file: Option<&Path>, err: &ConfigError) -> ConfigFailure {
+        match err.py_class() {
+            "FileNotFoundError" | "OSError" => ConfigFailure::Usage(match cfg_file {
+                Some(f) => format!("Unable to load config file: '{}'", f.display()),
+                // QUIRK kept: the message names /etc/taky.conf (spec §1.2).
+                None => "Unable to load './taky.conf' or '/etc/taky.conf'".to_owned(),
+            }),
+            _ => ConfigFailure::Config(format!("Configuration file error: {err}")),
+        }
+    }
+
+    /// Process exit code (argparse error 2, otherwise 1).
+    pub fn exit_code(&self) -> u8 {
+        match self {
+            ConfigFailure::Usage(_) => 2,
+            ConfigFailure::Config(_) => 1,
+        }
+    }
+
+    /// The stderr text (with a trailing newline), argparse style for [`ConfigFailure::Usage`].
+    pub fn render(&self, argv0: Option<&str>) -> String {
+        match self {
+            ConfigFailure::Usage(msg) => {
+                let mut cmd = command(argv0);
+                let prog = cmd.get_name().to_owned();
+                format!("{}\n{prog}: error: {msg}\n", cmd.render_usage())
+            }
+            ConfigFailure::Config(msg) => format!("{msg}\n"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn config_failures() {
+        let io = ConfigError::Io(std::io::Error::from(std::io::ErrorKind::PermissionDenied));
+        let f = ConfigFailure::classify(Some(Path::new("x.conf")), &io);
+        assert_eq!(
+            f,
+            ConfigFailure::Usage("Unable to load config file: 'x.conf'".into())
+        );
+        assert_eq!(f.exit_code(), 2);
+        let r = f.render(Some("/usr/bin/taky-rs"));
+        assert!(
+            r.ends_with("\ntaky-rs: error: Unable to load config file: 'x.conf'\n"),
+            "{r}"
+        );
+        let f = ConfigFailure::classify(None, &ConfigError::DefaultNotFound);
+        assert_eq!(
+            f,
+            ConfigFailure::Usage("Unable to load './taky.conf' or '/etc/taky.conf'".into())
+        );
+        let f = ConfigFailure::classify(None, &ConfigError::InvalidPort("x".into()));
+        assert_eq!(
+            f,
+            ConfigFailure::Config("Configuration file error: Invalid port: x".into())
+        );
+        assert_eq!(f.exit_code(), 1);
+        assert_eq!(
+            f.render(None),
+            "Configuration file error: Invalid port: x\n"
+        );
+    }
 
     #[test]
     fn defaults() {

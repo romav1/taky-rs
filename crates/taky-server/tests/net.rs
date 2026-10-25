@@ -243,8 +243,8 @@ async fn listeners(cfg: &taky_config::TakyConfig) -> Listeners {
         cot: TcpListener::bind((HOST, 0)).await.unwrap(),
         monitor,
         mgmt: Some({
-            // A failed start (start_errors) leaves the socket file; the takeover of a stale
-            // socket is the binary's job (S-314).
+            // Ready-made listener (no `Listeners::bind` stale-socket check here): clear any
+            // leftover file first. A failed `start` removes it itself (S-314).
             let _ = std::fs::remove_file(mgmt_path(cfg));
             UnixListener::bind(mgmt_path(cfg)).unwrap()
         }),
@@ -593,7 +593,13 @@ async fn start_errors() {
     let err = try_serve(config(&p, true, &o), now()).await.err().unwrap();
     assert_eq!(err.to_string(), "Not a boolean: maybe");
     o = serde_json::json!({"ssl": {"cert": "/nonexistent/server.crt"}});
-    assert!(try_serve(config(&p, true, &o), now()).await.is_err());
+    let cfg = config(&p, true, &o);
+    let sock = mgmt_path(&cfg);
+    assert!(try_serve(cfg, now()).await.is_err());
+    assert!(
+        !sock.exists(),
+        "a failed start must remove the mgmt socket file"
+    );
 }
 
 // ---------------------------------------------------------------------------------------------

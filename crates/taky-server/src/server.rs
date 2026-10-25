@@ -4,6 +4,7 @@
 //! addresses back (qa01 request A.3); the binary uses [`Listeners::bind`].
 
 use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
@@ -12,7 +13,8 @@ use taky_common::{SharedClock, Shutdown, pylog};
 use taky_config::TakyConfig;
 use taky_cot::{ClientId, ClientKind, Persistence, Router};
 use taky_pki::{CertDb, TlsMode, server_config};
-use tokio::net::{TcpListener, UnixListener};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpSocket, UnixListener, UnixStream};
 use tokio::task::JoinHandle;
 use tokio_rustls::TlsAcceptor;
 use tokio_util::task::TaskTracker;
@@ -38,12 +40,146 @@ pub struct Listeners {
     pub mgmt: Option<UnixListener>,
 }
 
+/// Mgmt socket file name under `root_dir` (`server.py:100`).
+pub const MGMT_SOCK_NAME: &str = "taky-mgmt.sock";
+/// Python `socket.listen()` default backlog (`min(SOMAXCONN, 128)`).
+const LISTEN_BACKLOG: u32 = 128;
+/// `ping_socket` receive timeout (`server.py:58`).
+const PING_TIMEOUT: Duration = Duration::from_secs(1);
+
 impl Listeners {
-    /// Bind per config: `bind_ip:port`, `mon_ip:mon_port`, `{root_dir}/taky-mgmt.sock`.
+    /// Bind per config, in the order of `COTServer.sock_setup` (spec §2): the mgmt socket
+    /// `{root_dir}/taky-mgmt.sock`, then CoT `bind_ip:port`, then the monitor `mon_ip:mon_port`
+    /// (only with SSL and `mon_ip` set).
+    ///
+    /// Mgmt: an existing socket file that answers a ping ⇒ error `Taky already appears to be
+    /// running via <path>`; a stale one (no answer, any socket error, or not a socket) is
+    /// removed and taken over. A mgmt bind error is logged (ERROR) and not fatal (`mgmt: None`).
+    /// CoT/monitor: `SO_REUSEADDR`, backlog 128; `bind_ip`/`mon_ip` unset ⇒ all IPv4 addresses,
+    /// otherwise the first `getaddrinfo` result (several ⇒ WARNING); a resolve error ⇒
+    /// `Unable to determine address info for bind_ip: <ip>`. If a later bind fails, the mgmt
+    /// socket file created here is removed again.
     pub async fn bind(cfg: &TakyConfig) -> std::io::Result<Listeners> {
-        let _ = cfg;
-        todo!("dev02: S-314")
+        let mgmt_path = cfg.taky.root_dir.join(MGMT_SOCK_NAME);
+        if !check_socket(&mgmt_path).await {
+            return Err(std::io::Error::other(format!(
+                "Taky already appears to be running via {}",
+                mgmt_path.display()
+            )));
+        }
+        let mgmt = match UnixListener::bind(&mgmt_path) {
+            Ok(l) => Some(l),
+            Err(e) => {
+                pylog!(
+                    LGR,
+                    Level::ERROR,
+                    "Unable to open management socket at {}: {e}",
+                    mgmt_path.display()
+                );
+                None
+            }
+        };
+        let guard = MgmtFileGuard(mgmt.as_ref().map(|_| mgmt_path.clone()));
+
+        let cot = build_srv(cfg.taky.bind_ip.as_deref(), cfg.cot_server.port).await?;
+        let monitor = match (&cfg.cot_server.mon_ip, cfg.ssl.enabled) {
+            (Some(ip), true) => {
+                let port = cfg.cot_server.mon_port.unwrap_or(8087);
+                Some(build_srv(Some(ip), port).await?)
+            }
+            _ => None,
+        };
+        guard.disarm();
+        Ok(Listeners { cot, monitor, mgmt })
     }
+}
+
+/// Removes the mgmt socket file on drop unless disarmed (failed bind / failed start).
+struct MgmtFileGuard(Option<PathBuf>);
+
+impl MgmtFileGuard {
+    fn disarm(mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for MgmtFileGuard {
+    fn drop(&mut self) {
+        if let Some(p) = self.0.take() {
+            let _ = std::fs::remove_file(p);
+        }
+    }
+}
+
+/// `check_socket` (`server.py:39-48`): `true` if the path is free (possibly after removing a
+/// stale file), `false` if a running server answered the ping.
+async fn check_socket(path: &Path) -> bool {
+    if std::fs::symlink_metadata(path).is_err() {
+        return true;
+    }
+    if ping_socket(path).await {
+        return false;
+    }
+    if let Err(e) = std::fs::remove_file(path) {
+        // Python's os.remove would raise here; the bind below then reports the problem.
+        pylog!(
+            LGR,
+            Level::DEBUG,
+            "Unable to remove stale management socket {}: {e}",
+            path.display()
+        );
+    }
+    true
+}
+
+/// `ping_socket` (`server.py:51-64`): connect, send `{"cmd": "ping"}\0`, wait ≤ 1 s for any
+/// reply byte.
+async fn ping_socket(path: &Path) -> bool {
+    let attempt = async {
+        let mut s = UnixStream::connect(path).await?;
+        s.write_all(b"{\"cmd\": \"ping\"}\0").await?;
+        let mut buf = [0u8; 4096];
+        let n = s.read(&mut buf).await?;
+        std::io::Result::Ok(n > 0)
+    };
+    matches!(
+        tokio::time::timeout(PING_TIMEOUT, attempt).await,
+        Ok(Ok(true))
+    )
+}
+
+/// `build_srv` (`server.py:15-36`).
+async fn build_srv(ip: Option<&str>, port: u16) -> std::io::Result<TcpListener> {
+    let addr = match ip {
+        None => SocketAddr::from(([0, 0, 0, 0], port)),
+        Some(ip) => {
+            let unresolved = || {
+                std::io::Error::other(format!(
+                    "Unable to determine address info for bind_ip: {ip}"
+                ))
+            };
+            let addrs: Vec<SocketAddr> = tokio::net::lookup_host((ip, port))
+                .await
+                .map_err(|_| unresolved())?
+                .collect();
+            if addrs.len() > 1 {
+                pylog!(
+                    "root",
+                    Level::WARN,
+                    "Multiple address entities for {ip}:{port}"
+                );
+            }
+            *addrs.first().ok_or_else(unresolved)?
+        }
+    };
+    let sock = if addr.is_ipv4() {
+        TcpSocket::new_v4()?
+    } else {
+        TcpSocket::new_v6()?
+    };
+    sock.set_reuseaddr(true)?;
+    sock.bind(addr)?;
+    sock.listen(LISTEN_BACKLOG)
 }
 
 /// Everything the server needs besides sockets.
@@ -87,7 +223,25 @@ impl RunningServer {
 ///
 /// `listeners.mgmt` serves the mgmt protocol ([`crate::mgmt`]); with `cot_server.log_cot` set,
 /// every connection writes its CoT log ([`taky_cot::CotLogger`]).
+///
+/// On error the mgmt socket file of `listeners.mgmt` is removed (like `COTServer.shutdown()`
+/// after a failed `sock_setup`). If the Hub task ends unexpectedly (a panic), CRITICAL
+/// `Unhandled exception: <err>` is logged, shutdown is triggered and [`RunningServer::join`]
+/// returns the error (Python: an exception in `loop()` ends the process with exit 1).
 pub async fn start(opts: ServerOptions, listeners: Listeners) -> anyhow::Result<RunningServer> {
+    let guard = MgmtFileGuard(
+        listeners
+            .mgmt
+            .as_ref()
+            .and_then(|m| m.local_addr().ok())
+            .and_then(|a| a.as_pathname().map(Path::to_path_buf)),
+    );
+    let running = start_inner(opts, listeners).await?;
+    guard.disarm();
+    Ok(running)
+}
+
+async fn start_inner(opts: ServerOptions, listeners: Listeners) -> anyhow::Result<RunningServer> {
     let cfg = &opts.cfg;
     let (tls, cert_db) = if cfg.ssl.enabled {
         // server.py:149 re-validates the key with getboolean (S-305 D-b).
@@ -195,15 +349,38 @@ pub async fn start(opts: ServerOptions, listeners: Listeners) -> anyhow::Result<
     }
 
     let task = tokio::spawn(async move {
-        shutdown.wait().await;
+        let mut hub_task = hub_task;
+        let mut result = Ok(());
+        let hub_done = tokio::select! {
+            biased;
+            () = shutdown.wait() => None,
+            r = &mut hub_task => Some(r),
+        };
+        let hub_alive = hub_done.is_none();
+        // The Hub returns by itself only on shutdown (it may win the race against the
+        // `shutdown.wait()` above); anything else is a panic or an unexpected end.
+        let failure = match hub_done {
+            Some(Err(e)) => Some(anyhow::anyhow!("Hub task failed: {e}")),
+            Some(Ok(())) if !shutdown.is_triggered() => {
+                Some(anyhow::anyhow!("Hub task ended unexpectedly"))
+            }
+            _ => None,
+        };
+        if let Some(err) = failure {
+            tracing::error!(lgr = "root", critical = true, "Unhandled exception: {err}");
+            shutdown.trigger();
+            result = Err(err);
+        }
         for a in accepts {
             let _ = a.await;
         }
-        let _ = hub_task.await;
+        if hub_alive {
+            let _ = hub_task.await;
+        }
         conns.close();
         let _ = tokio::time::timeout(CLOSE_TIMEOUT * 2, conns.wait()).await;
         pylog!(LGR, Level::INFO, "Stopped");
-        Ok(())
+        result
     });
 
     Ok(RunningServer {

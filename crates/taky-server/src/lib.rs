@@ -8,7 +8,10 @@
 //! * [`mgmt`] — [`MgmtRequest`] (NUL-terminated JSON on `{root_dir}/taky-mgmt.sock`; status /
 //!   kickban answered by the Hub) — S-313;
 //! * [`server`] — [`start`] on ready-made listeners (qa01 request A.3; CoT + monitor accept
-//!   S-312, mgmt `UnixListener` + `log_cot` S-313), [`Listeners::bind`] (S-314);
+//!   S-312, mgmt `UnixListener` + `log_cot` S-313), [`Listeners::bind`] (stale mgmt socket
+//!   takeover, S-314);
+//! * [`cli`] — `taky-rs` arguments and config-error reporting; the binary `src/bin/taky-rs.rs`
+//!   (signals, graceful shutdown, exit codes) — S-314;
 //! * [`limits`] — backpressure constants (ARCHITECTURE §6).
 //!
 //! Feature `testkit`: [`HubHandle::settle`] and everything from `taky-cot/testkit`.
