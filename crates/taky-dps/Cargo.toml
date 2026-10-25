@@ -28,6 +28,7 @@ tower.workspace = true
 tower-http.workspace = true
 tokio.workspace = true
 tokio-rustls.workspace = true
+tokio-util.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 unicode-normalization.workspace = true
@@ -41,6 +42,9 @@ tracing.workspace = true
 
 [dev-dependencies]
 assert_cmd.workspace = true
+# Test certificates are generated at test time (no keys in the repo).
+rcgen.workspace = true
+taky-common = { workspace = true, features = ["testkit"] }
 
 [lints]
 workspace = true
