@@ -25,9 +25,9 @@ use crate::datapackage::{ClientPackage, MANIFEST_PATH, client_pkg_name, server_p
 use crate::fsutil::current_umask;
 use crate::pyerr::{none_path, os_error, pki};
 
-/// `except (OSError, configparser.ParsingError)` in `build_client`: these are printed and
-/// exit 1; every other config error takes the `"build_client failed: …"` path.
-fn printed_config_error(e: &ConfigError) -> bool {
+/// `except (OSError, configparser.ParsingError)` in `build_client` (also `status`, `kickban`,
+/// `systemd`): these are printed and exit 1; every other config error takes the `"build_client failed: …"` path.
+pub(crate) fn printed_config_error(e: &ConfigError) -> bool {
     matches!(
         e.py_class(),
         "OSError"

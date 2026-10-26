@@ -1,8 +1,7 @@
 //! `takyctl-rs` — taky command line utility (Python: `takyctl = taky.cli.__main__:main`).
 //!
-//! Arguments are parsed 1:1 with the original (ARCHITECTURE §2, §2.1). Implemented: `setup`,
-//! `build_client` (S-322); `systemd`, `status`, `kickban` fail with
-//! `"<cmd> failed: not implemented"` and exit code 1 until S-323.
+//! Arguments are parsed 1:1 with the original (ARCHITECTURE §2, §2.1): `setup`,
+//! `build_client` (S-322), `systemd`, `status`, `kickban` (S-323).
 
 use std::process::ExitCode;
 
@@ -24,9 +23,27 @@ fn run(args: &cli::Args, cmd: &Command) -> anyhow::Result<u8> {
             chrono::Utc::now().naive_utc(),
             &mut err,
         ),
-        Command::Systemd(_) | Command::Status(_) | Command::Kickban(_) => {
-            anyhow::bail!("not implemented")
-        }
+        Command::Systemd(a) => takyctl::systemd::systemd(
+            a,
+            args.cfg_file.as_deref(),
+            &takyctl::systemd::SystemdEnv::from_process(),
+            &mut out,
+            &mut err,
+        ),
+        Command::Status(a) => takyctl::status::status(
+            a,
+            args.cfg_file.as_deref(),
+            &std::env::current_dir()?,
+            &mut out,
+            &mut err,
+        ),
+        Command::Kickban(a) => takyctl::kickban::kickban(
+            a,
+            args.cfg_file.as_deref(),
+            &std::env::current_dir()?,
+            &mut out,
+            &mut err,
+        ),
     }
 }
 
