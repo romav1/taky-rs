@@ -18,6 +18,26 @@
 //!   `{"seq": n, "settle": true}` → Hub settle barrier only;
 //! * SIGTERM/SIGINT → graceful shutdown, exit 0; a server that stops on its own (Hub panic) →
 //!   `<ctl>/crash.txt`, exit 1.
+//!
+//! **Keep in sync with the `taky-rs` binary** (`crates/taky-server/src/bin/taky-rs.rs`,
+//! review-3E N-4): this `main`/`run` mirror its `main` and `run` — `taky_config::load_config`
+//! → multi-thread runtime → signal handlers before the sockets → [`Listeners::bind`] (same
+//! stale mgmt-socket check) → [`start`] with [`ServerOptions`] → wait → `Shutdown::trigger` →
+//! `RunningServer::join` within `SHUTDOWN_LIMIT` (10 s) → `shutdown_timeout(1 s)`. When the
+//! startup sequence there changes (new `ServerOptions` field, new listener, another step
+//! between `load_config` and `start`), change it here too, or switch both to a shared helper
+//! if dev01 ever factors one out of `taky-rs.rs`. Deliberate differences, and only these:
+//! * clock: [`FakeClock`] frozen at `--now` (advanced via the control channel) instead of
+//!   `SystemClock`;
+//! * arguments: the minimal parser above (`--conf/--now/--ctl/--log-level`) instead of
+//!   `taky_server::cli` (clap) — no `ConfigFailure` rendering/exit 2, no `taky-rs v…` banner;
+//!   `load_config(Some(conf), true)` (an explicit `-c` file);
+//! * SIGUSR1 runs the control channel ([`handle_ctl`]) instead of being ignored; the
+//!   `<ctl>/ready` marker after `start`; `<ctl>/crash.txt` when the server stops without a
+//!   signal;
+//! * logging: startup/config errors go to stderr via `eprintln!` (the same
+//!   `ERROR:root:Unable to start COTServer: <err>` text); no `Got SIGTERM`/`Got SIGINT` or
+//!   `Exception during shutdown` lines.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;

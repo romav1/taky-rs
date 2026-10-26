@@ -1,45 +1,24 @@
-//! Port of `taky/tests/test_cot_event.py` (+ S-306 model checks: wire bytes, D-8, persist_ttl,
-//! marti, detail dispatch, decoder).
+//! Port of `taky/tests/test_cot_event.py` (test-strategy §2 rows 1–8) + S-306 model checks
+//! (wire bytes, D-8, persist_ttl, marti, detail dispatch, decoder).
 #![allow(clippy::unwrap_used, clippy::approx_constant)] // test helpers outside #[test] fns; XML_S lon
+
+mod common;
 
 use bytes::BytesMut;
 use chrono::{NaiveDate, NaiveDateTime, TimeDelta};
+use common::{XML_S, assert_elements_equal as elements_equal, parse};
 use taky_common::clock::FakeClock;
 use taky_cot::{CotDecoder, Event, EventDetail, UnmarshalError};
-use taky_xml::{Element, Node, SerOpts, parse_element, serialize};
+use taky_xml::{Element, Node, SerOpts, serialize};
 use tokio_util::codec::Decoder;
-
-/// `taky/tests/__init__.py:XML_S`.
-const XML_S: &str = r#"<event version="2.0" uid="ANDROID-deadbeef" type="a-f-G-U-C" how="m-g" time="2021-02-27T20:32:24.771Z" start="2021-02-27T20:32:24.771Z" stale="2021-02-27T20:38:39.771Z"><point lat="1.234567" lon="-3.141592" hae="-25.7" ce="9.9" le="9999999.0"/><detail><takv os="29" version="4.0.0.0 (deadbeef).1234567890-CIV" device="Some Android Device" platform="ATAK-CIV"/><contact xmppUsername="xmpp@host.com" endpoint="*:-1:stcp" callsign="JENNY"/><uid Droid="JENNY"/><precisionlocation altsrc="GPS" geopointsrc="GPS"/><__group role="Team Member" name="Cyan"/><status battery="78"/><track course="80.24833892285461" speed="0.0"/></detail></event>"#;
-
-fn parse(s: &str) -> Element {
-    parse_element(s.as_bytes(), &taky_cot::limits::STREAM_LIMITS).unwrap()
-}
-
-/// `taky/tests/__init__.py:elements_equal` (tag, text, tail, attrib, children).
-fn elements_equal(a: &Element, b: &Element) {
-    assert_eq!(a.tag, b.tag);
-    assert_eq!(a.text, b.text, "text of {}", a.tag);
-    assert_eq!(a.tail, b.tail, "tail of {}", a.tag);
-    let (mut x, mut y) = (a.attrs.clone(), b.attrs.clone());
-    x.sort();
-    y.sort();
-    assert_eq!(x, y, "attrib of {}", a.tag);
-    assert_eq!(a.children.len(), b.children.len(), "len of {}", a.tag);
-    for (c, d) in a.children.iter().zip(&b.children) {
-        match (c, d) {
-            (Node::Element(c), Node::Element(d)) => elements_equal(c, d),
-            (c, d) => assert_eq!(c, d),
-        }
-    }
-}
 
 fn unmarshal_err(e: &Element) -> UnmarshalError {
     Event::from_element(e).unwrap_err()
 }
 
+/// `test_cot_event.COTTestcase.test_unmarshall`.
 #[test]
-fn test_unmarshall() {
+fn unmarshall() {
     let event = Event::from_element(&parse(XML_S)).unwrap();
     assert_eq!(event.version.as_deref(), Some("2.0"));
     assert_eq!(event.uid.as_deref(), Some("ANDROID-deadbeef"));
@@ -65,23 +44,26 @@ fn test_unmarshall() {
     assert_eq!(u.course, Some(80.24833892285461));
 }
 
+/// `test_cot_event.COTTestcase.test_marshall`.
 #[test]
-fn test_marshall() {
+fn marshall() {
     let event = Event::from_element(&parse(XML_S)).unwrap();
     elements_equal(&parse(XML_S), &event.to_element().unwrap());
     // Stronger than the original: byte-exact wire form.
     assert_eq!(&*event.to_frame().unwrap(), XML_S.as_bytes());
 }
 
+/// `test_cot_event.COTTestcase.test_marshall_err_tagname`.
 #[test]
-fn test_marshall_err_tagname() {
+fn marshall_err_tagname() {
     let mut e = parse(XML_S);
     e.tag = "xxx".into();
     assert_eq!(unmarshal_err(&e).0, "Cannot create Event from xxx");
 }
 
+/// `test_cot_event.COTTestcase.test_marshall_err_ts_failure`.
 #[test]
-fn test_marshall_err_ts_failure() {
+fn marshall_err_ts_failure() {
     let mut e = parse(XML_S);
     e.set("start", "xxx");
     assert_eq!(unmarshal_err(&e).0, "Date parsing error");
@@ -94,29 +76,33 @@ fn first_child_mut(e: &mut Element, idx: usize) -> &mut Element {
     }
 }
 
+/// `test_cot_event.COTTestcase.test_marshall_err_invalid_point`.
 #[test]
-fn test_marshall_err_invalid_point() {
+fn marshall_err_invalid_point() {
     let mut e = parse(XML_S);
     first_child_mut(&mut e, 0).set("lat", "xxx");
     assert_eq!(unmarshal_err(&e).0, "Issue parsing point");
 }
 
+/// `test_cot_event.COTTestcase.test_marshall_err_no_uid`.
 #[test]
-fn test_marshall_err_no_uid() {
+fn marshall_err_no_uid() {
     let mut e = parse(XML_S);
     e.attrs.retain(|(k, _)| k != "uid");
     assert_eq!(unmarshal_err(&e).0, "Event must have 'uid' attribute");
 }
 
+/// `test_cot_event.COTTestcase.test_marshall_err_no_type`.
 #[test]
-fn test_marshall_err_no_type() {
+fn marshall_err_no_type() {
     let mut e = parse(XML_S);
     e.attrs.retain(|(k, _)| k != "type");
     assert_eq!(unmarshal_err(&e).0, "Event must have 'type' attribute");
 }
 
+/// `test_cot_event.COTTestcase.test_marti_exceptions`.
 #[test]
-fn test_marti_exceptions() {
+fn no_detail_is_none() {
     let mut e = parse(XML_S);
     e.children.remove(1);
     let evt = Event::from_element(&e).unwrap();

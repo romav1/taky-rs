@@ -1,142 +1,22 @@
-//! Port of `taky/tests/test_router.py`, `test_max_ttl.py`, `test_takclient.py` (via
-//! `TestOutbox`, no network) + Router rules from spec §6/§8–§12 and the slow-client policy
-//! (review-T-10 N-3).
+//! Port of `taky/tests/test_router.py` (test-strategy §2 rows 11–14, via `TestOutbox`, no
+//! network) + Router rules from spec §6/§8–§12 and the slow-client policy (review-T-10 N-3).
+//! `test_max_ttl.py` → `max_ttl.rs`, `test_takclient.py` → `takclient.rs` and
+//! `taky-server/tests/socket_client.rs`.
 #![allow(clippy::unwrap_used)]
 
-use std::sync::Arc;
+mod common;
+
 use std::time::Duration;
 
-use bytes::BytesMut;
-use chrono::{NaiveDate, NaiveDateTime, TimeDelta};
+use chrono::{NaiveDateTime, TimeDelta};
+use common::{Bench, XML_EMPTY_MARTI_BC, XML_S};
 use taky_cot::router::{SLOW_CLIENT, apply_max_ttl, pong_event};
 use taky_cot::testkit::{ClientQuery, FakeClock, TestOutbox};
-use taky_cot::{
-    ClientHandle, ClientId, ClientKind, ClientStats, CotDecoder, Event, EventDetail, GeoChat,
-    Persistence, Router, Teams,
-};
+use taky_cot::{ClientId, ClientKind, Event, EventDetail, GeoChat, Persistence, Teams};
 use taky_xml::parse_element;
-use tokio_util::codec::Decoder;
-
-/// `taky/tests/__init__.py:XML_S`.
-const XML_S: &str = r#"<event version="2.0" uid="ANDROID-deadbeef" type="a-f-G-U-C" how="m-g" time="2021-02-27T20:32:24.771Z" start="2021-02-27T20:32:24.771Z" stale="2021-02-27T20:38:39.771Z"><point lat="1.234567" lon="-3.141592" hae="-25.7" ce="9.9" le="9999999.0"/><detail><takv os="29" version="4.0.0.0 (deadbeef).1234567890-CIV" device="Some Android Device" platform="ATAK-CIV"/><contact xmppUsername="xmpp@host.com" endpoint="*:-1:stcp" callsign="JENNY"/><uid Droid="JENNY"/><precisionlocation altsrc="GPS" geopointsrc="GPS"/><__group role="Team Member" name="Cyan"/><status battery="78"/><track course="80.24833892285461" speed="0.0"/></detail></event>"#;
-
-/// `taky/tests/__init__.py:XML_EMPTY_MARTI_BC`.
-const XML_EMPTY_MARTI_BC: &str = r#"
-<event version="2.0" uid="EB77220E-6299-4CA3-95FC-0200BD9FE78A" type="a-u-G" how="h-g-i-g-o" time="2023-01-12T09:53:31.000Z" start="2023-01-12T09:53:31.000Z" stale="2023-01-12T09:55:31.000Z">
-    <point lat="54.338986" lon="9.755263" hae="0.0" ce="0.0" le="0.0"/>
-    <detail>
-        <contact callsign="poop"/>
-        <precisionlocation geopointsrc="???" altsrc="???"/>
-        <status readiness="true"/>
-        <archive/>
-        <link uid="1874F828-5CF1-4289-B6C0-D4F6ABFB0B4D" production_time="2023-01-12T09:53:31Z" type="a-f-G-U-C" parent_callsign="FM05-iOS" relation="p-p"/>
-        <usericon iconsetpath="COT_MAPPING_2525B/a-u/a-u-G"/>
-        <color argb="-1"/>
-        <marti/>
-        <remarks/>
-    </detail>
-</event>
-"#;
 
 fn t(s: &str) -> NaiveDateTime {
     taky_cot::isoparse::isoparse(s).unwrap()
-}
-
-struct Bench {
-    clock: Arc<FakeClock>,
-    router: Router,
-    outs: Vec<(ClientId, Arc<TestOutbox>)>,
-}
-
-impl Bench {
-    fn new(max_ttl: i64, now: NaiveDateTime) -> Bench {
-        let clock = FakeClock::new(now);
-        let router = Router::new(max_ttl, Persistence::memory(clock.shared()), clock.shared());
-        Bench {
-            clock,
-            router,
-            outs: Vec::new(),
-        }
-    }
-
-    /// `datetime.utcnow()` stand-in used by the original tests.
-    fn real_now() -> Bench {
-        Bench::new(
-            -1,
-            NaiveDate::from_ymd_opt(2026, 10, 25)
-                .unwrap()
-                .and_hms_micro_opt(12, 0, 0, 123_456)
-                .unwrap(),
-        )
-    }
-
-    fn connect_with(&mut self, id: u64, kind: ClientKind, out: Arc<TestOutbox>) -> ClientId {
-        let id = ClientId(id);
-        self.router.client_connect(ClientHandle {
-            id,
-            kind,
-            outbox: out.clone(),
-            stats: Arc::new(ClientStats::new(0.0)),
-            addr: None,
-            peer_serial: None,
-        });
-        self.outs.push((id, out));
-        id
-    }
-
-    fn connect(&mut self, id: u64, kind: ClientKind) -> ClientId {
-        self.connect_with(id, kind, TestOutbox::new())
-    }
-
-    fn out(&self, id: ClientId) -> &Arc<TestOutbox> {
-        &self.outs.iter().find(|(i, _)| *i == id).unwrap().1
-    }
-
-    /// Frames received by `id`, re-parsed (`UnittestTAKClient.queue`).
-    fn recv(&self, id: ClientId) -> Vec<Event> {
-        self.out(id)
-            .drain()
-            .iter()
-            .map(|f| {
-                Event::from_element(&parse_element(f, &taky_cot::limits::STREAM_LIMITS).unwrap())
-                    .unwrap()
-            })
-            .collect()
-    }
-
-    fn uids(&self, id: ClientId) -> Vec<String> {
-        self.recv(id).into_iter().map(|e| e.uid.unwrap()).collect()
-    }
-
-    /// `TAKClient.feed`: decoder → `Event::from_element` → `Router::on_event`.
-    async fn feed(&mut self, src: ClientId, data: &str) {
-        let mut dec = CotDecoder::new();
-        let mut buf = BytesMut::from(data.as_bytes());
-        while let Some(elm) = dec.decode(&mut buf).unwrap() {
-            let Ok(evt) = Event::from_element(&elm) else {
-                continue;
-            };
-            self.router.on_event(src, evt).await;
-        }
-    }
-
-    /// `XML_S` with time/start = now and stale = now + `ttl` (the tests' `elm.set(...)`).
-    fn ident_msg(&self, xml: &str, ttl: TimeDelta) -> String {
-        let now = self.clock_now();
-        let mut e = parse_element(xml.trim().as_bytes(), &taky_cot::limits::STREAM_LIMITS).unwrap();
-        e.set("time", now.format("%Y-%m-%dT%H:%M:%S%.6f").to_string());
-        e.set("start", now.format("%Y-%m-%dT%H:%M:%S%.6f").to_string());
-        e.set(
-            "stale",
-            (now + ttl).format("%Y-%m-%dT%H:%M:%S%.6f").to_string(),
-        );
-        String::from_utf8(taky_xml::serialize(&e, &taky_xml::SerOpts::default())).unwrap()
-    }
-
-    fn clock_now(&self) -> NaiveDateTime {
-        use taky_common::Clock;
-        self.clock.utc_now()
-    }
 }
 
 fn plain_event(uid: &str, etype: &str, detail: &str, now: NaiveDateTime, ttl_s: i64) -> String {
@@ -158,8 +38,9 @@ fn sa(_uid: &str, cs: &str, team: &str) -> String {
 
 // ---------------------------------------------------------------- test_router.py
 
+/// `test_router.RouterTestcase.test_route_packet`.
 #[tokio::test]
-async fn test_route_packet() {
+async fn route_packet() {
     let mut b = Bench::real_now();
     let tk1 = b.connect(1, ClientKind::Cot);
     let tk2 = b.connect(2, ClientKind::Cot);
@@ -183,8 +64,9 @@ async fn test_route_packet() {
     );
 }
 
+/// `test_router.RouterTestcase.test_persist_announce`.
 #[tokio::test]
-async fn test_persist_announce() {
+async fn persist_announce() {
     let mut b = Bench::real_now();
     let tk1 = b.connect(1, ClientKind::Cot);
     let msg = b.ident_msg(XML_S, TimeDelta::days(10));
@@ -198,8 +80,9 @@ async fn test_persist_announce() {
     assert!(b.out(tk1).is_empty());
 }
 
+/// `test_router.RouterTestcase.test_geochat`.
 #[tokio::test]
-async fn test_geochat() {
+async fn geochat() {
     let mut b = Bench::real_now();
     let tk1 = b.connect(1, ClientKind::Cot);
     let msg = b.ident_msg(XML_S, TimeDelta::days(10));
@@ -239,62 +122,15 @@ async fn test_geochat() {
     assert!(b.out(src).is_empty());
 }
 
+/// `test_router.RouterTestcase.test_empty_marti`.
 #[tokio::test]
-async fn test_empty_marti() {
+async fn empty_marti() {
     let mut b = Bench::real_now();
     let tk1 = b.connect(1, ClientKind::Cot);
     let tk2 = b.connect(2, ClientKind::Cot);
     let msg = b.ident_msg(XML_EMPTY_MARTI_BC, TimeDelta::days(10));
     b.feed(tk1, &msg).await;
     assert_eq!(b.uids(tk2), vec!["EB77220E-6299-4CA3-95FC-0200BD9FE78A"]);
-}
-
-// ---------------------------------------------------------------- test_max_ttl.py
-
-#[tokio::test]
-async fn test_max_ttl() {
-    let max_ttl_s = 10;
-    let now = NaiveDate::from_ymd_opt(2022, 1, 1)
-        .unwrap()
-        .and_hms_opt(0, 0, 0)
-        .unwrap();
-    let mut b = Bench::new(max_ttl_s, now);
-    let tk1 = b.connect(1, ClientKind::Cot);
-    let msg = b.ident_msg(XML_S, TimeDelta::days(10));
-    b.feed(tk1, &msg).await;
-    let tk2 = b.connect(2, ClientKind::Cot);
-    b.router.send_persist(tk2).await;
-    let ret = b.recv(tk2);
-    assert_eq!(ret.len(), 1);
-    assert_eq!(ret[0].uid.as_deref(), Some("ANDROID-deadbeef"));
-    assert_eq!(ret[0].persist_ttl(b.clock.as_ref()), max_ttl_s);
-    assert_eq!(ret[0].stale, now + TimeDelta::seconds(max_ttl_s));
-}
-
-// ---------------------------------------------------------------- test_takclient.py
-
-#[tokio::test]
-async fn test_ident() {
-    let mut b = Bench::real_now();
-    let tk = b.connect(1, ClientKind::Cot);
-    b.feed(tk, XML_S).await;
-    let u = b.router.user(tk).unwrap();
-    assert_eq!(u.callsign.as_deref(), Some("JENNY"));
-    assert_eq!(u.uid.as_deref(), Some("ANDROID-deadbeef"));
-    assert_eq!(u.device.os.as_deref(), Some("29"));
-    assert_eq!(u.device.device.as_deref(), Some("Some Android Device"));
-    assert_eq!(u.group, Some(Teams::Cyan));
-    assert_eq!(u.battery.as_deref(), Some("78"));
-    assert_eq!(u.role.as_deref(), Some("Team Member"));
-}
-
-#[test]
-fn test_invalid_xml() {
-    // SocketTAKClient.socket_rx on b"</invalid>" closes the socket: the decoder reports a
-    // stream error, on which the connection task (dev02) disconnects.
-    let mut dec = CotDecoder::new();
-    let mut buf = BytesMut::from(&b"</invalid>"[..]);
-    assert!(dec.decode(&mut buf).is_err());
 }
 
 // ---------------------------------------------------------------- spec §6/§8–§12
