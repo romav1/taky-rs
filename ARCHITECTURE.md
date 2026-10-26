@@ -242,6 +242,7 @@ Access log to stdout in the gunicorn format `%(t)s "%(r)s" %(s)s %(b)s "%(a)s"`.
 | Depth/attributes/names/nodes | 256 incl. the virtual `<root>` (as libxml2: 255 nested ok) / 256 / 1 KiB / 100 000 nodes per top-level element | same | depth 256 — libxml2 |
 | Socket send | `write_all` with a 30 s timeout per frame | timeout ⇒ disconnect | non-blocking send |
 | Number of connections | no limit (as the original), `ulimit` | — | — |
+| mgmt request frame | 1 MiB without `\0` (`MGMT_MAX_FRAME`, S-313) | exceeded ⇒ the mgmt connection is closed | buffered without a limit (D-3 extension, review-3C) |
 
 Slow-client policy (review-T-10 N-3, implemented in S-308, accepted in review-3B): the limit is enforced by the
 `Outbox` implementation (taky-server; byte **and** frame accounting). On `try_send` → `Full` the Router drops that
@@ -324,9 +325,17 @@ handshake (in the original, events before the handshake were silently dropped �
   SIGUSR1 — ignored (with `-d` — a debug log). A shutdown error → `critical`, exit 1.
 - Startup: if `taky-mgmt.sock` exists — ping (`{"cmd": "ping"}\0`, 1 s); a reply ⇒ error
   "Taky already appears to be running", exit 1; none ⇒ delete it and take it over. A mgmt bind error is not fatal.
+  A stale file that cannot be removed must fail startup like Python's `os.remove` exception (`Unable to start COTServer: …`,
+  exit 1) — review-3C N-2; as of d0707b4 Rust logs DEBUG and continues without mgmt.
+- As implemented (S-314): logs `Got SIGTERM` / `Got SIGINT` (Python is silent on SIGINT — non-normative, compat 1.4.17);
+  banner `INFO:root:taky-rs v<ver>` (G-3); `Listening for <mode> on <ip>:<port>` is logged after the bind with the bound
+  address (Python: before, with the config value; non-normative). Whole shutdown ≤ 10 s, else CRITICAL
+  `Exception during shutdown`, exit 1. A Hub panic ⇒ CRITICAL `Unhandled exception: …`, shutdown, exit 1.
 - `taky_dps-rs`: SIGTERM/SIGINT → stop accepting, wait for active requests up to 30 s (like gunicorn's
   `graceful_timeout`), exit 0.
-- The Hub drains its queue after cancellation for no longer than 1 s; the Redis writer flushes its buffer for no longer than 1 s.
+- The Hub does **not** drain its queue after cancellation (as implemented, S-312: `biased` shutdown branch, then all clients
+  are closed with `"Server shutting down"`); Redis writes are awaited in the actor, so there is no writer buffer to flush
+  (ADR-001 errata 2026-10-25). Connection tasks get ≤ 2 × `CLOSE_TIMEOUT` to finish.
 
 ---
 
@@ -407,6 +416,8 @@ Boundary: **dev01** — `taky-common`, `taky-config`, `taky-xml`, `taky-cot` (mo
 Persistence, CotLogger). **dev02** — `taky-pki`, `taky-server` (network, TLS, Hub, mgmt, signals),
 `taky-dps`, `takyctl`, cross-build, Docker. The contracts below are fixed as stubs in T-10 (dev01 creates the
 workspace and signatures with `todo!()`), afterwards they change only by agreement via inbox + arch01 review.
+(Since S-312, `taky-server` (T-23: S-312..S-314) is implemented and owned by **dev01** (pm01 reassignment); dev02 keeps
+`taky-pki`, `taky-dps`, `takyctl`. Review-3C, arch01/handoff/review-3C.md.)
 
 ```rust
 // ===== taky-common (dev01) =====
@@ -473,10 +484,11 @@ pub type Frame = Arc<[u8]>;
 pub struct ClientId(pub u64);
 pub enum ClientKind { Cot, Monitor }
 pub enum OutboxError { Full, Closed }
-pub trait Outbox: Send + Sync + 'static {         // implemented by dev02 (bounded mpsc + close)
+pub trait Outbox: Send + Sync + 'static {         // implemented by taky-server::conn::ConnOutbox (S-312)
     fn try_send(&self, frame: Frame) -> Result<(), OutboxError>;
     fn close(&self, reason: &str);                // Router asks to disconnect (Full ⇒ "Slow client")
-}
+    fn pending(&self) -> usize { 0 }              // S-312: frames accepted, not yet written+flushed (0 once closed);
+}                                                 // only used by the testkit barrier HubHandle::settle
 pub struct ClientStats { pub connected: f64, pub num_rx: AtomicU64, pub last_rx: AtomicF64 /* f64 bits in AtomicU64 */ }
 pub struct ClientHandle { pub id: ClientId, pub kind: ClientKind, pub outbox: Arc<dyn Outbox>,
                           pub stats: Arc<ClientStats>, pub addr: Option<SocketAddr>,
@@ -495,9 +507,16 @@ impl Router {
 }
 // S-308: free functions router::{apply_max_ttl(max_ttl, &mut Event, &dyn Clock) -> bool, pong_event(&dyn Clock)},
 // const SLOW_CLIENT = "Slow client".
-pub struct CotLogger { /* log_cot dir, file */ }
-impl CotLogger { pub fn on_event(&mut self, user: Option<&TakUser>, addr: Option<IpAddr>, kind: ClientKind, evt: &Event);
-                 pub fn on_error(&mut self, elm: &Element, exc: &str); }
+pub struct CotLogger { /* log_cot dir, kind, addr, max_ttl, clock, identified user, file */ }  // one per connection
+impl CotLogger { pub fn new(dir: Option<&Path>, kind: ClientKind, addr: Option<IpAddr>, max_persist_ttl: i64,
+                            clock: SharedClock) -> CotLogger;              // S-313
+                 pub fn with_logger_name(self, lgr: impl Into<String>) -> CotLogger;
+                 pub fn on_event(&mut self, elm: &Element, evt: &Event);  // S-313 (was on_event(user, addr, kind, evt))
+                 pub fn on_error(&mut self, elm: &Element, exc: &str);
+                 pub fn enabled(&self) -> bool; pub fn file_name(&self) -> Option<PathBuf>; }
+// cotlog::{sanitize_file_name (D-12), TAKY_ERR}; blocking I/O — the conn task calls it via spawn_blocking, in order.
+// S-313: Event::to_wire_element() -> Result<Element, SerializeError> (to_element + D-8 check; to_frame uses it);
+//        Teams::py_str() (str(Teams), e.g. "Teams.CYAN", mgmt status).
 // log_cot contract for the connection task (review-3B N-1; Python logs after route, i.e. after max_ttl):
 // the conn task keeps the original Element, and for each parsed event that is not a ping/empty type/`*-ping` uid it
 // logs a CLONE with router::apply_max_ttl applied (the Router must receive the unmodified Event: the monitor copy is
@@ -510,19 +529,53 @@ impl CertDb { pub fn open(path: &Path) -> Result<CertDb, PkiError>;
               pub fn by_serial(&self, sn: &[u8]) -> Option<&CertRecord>;
               pub fn by_name<'a>(&'a self, cn: &'a str) -> impl Iterator<Item = &'a CertRecord>;
               pub fn revoke(&mut self, sn: &[u8], when: NaiveDateTime) -> Result<(), PkiError>;
-              pub fn add(&mut self, cert_der: &[u8]) -> Result<(), PkiError>; }
+              pub fn add(&mut self, cert_der: &[u8]) -> Result<(), PkiError>;
+              pub fn reload_if_changed(&mut self) -> Result<bool, PkiError>;   // D-11 (S-311)
+              pub fn refresh(&mut self) -> Option<PkiError>;  // S-319a: reload_if_changed, an error returned once per
+                                                              // (file stamp, text); used by Hub::connect, kickban, DPS
+              pub fn is_revoked(&self, sn: &[u8]) -> bool; /* + reload, records, path */ }
+// Write protocol (ADR-003 errata §4, B-1 closed in review-3C): sidecar `<db>.lock` opened rw, read-only on EACCES,
+// created O_EXCL if missing; as euid 0 the new lock and `<db>.tmp.<pid>` are fchown'ed to the db owner (dir owner if
+// no db) — an fchown error aborts the write; symlinked cert_db: the target is replaced, the link kept.
 pub fn server_config(ssl: &SslSect, mode: TlsMode) -> Result<Arc<rustls::ServerConfig>, PkiError>;
 pub fn peer_identity(conn: &rustls::ServerConnection) -> Option<PeerIdentity>;
 ```
 
-Hub (dev02) is the only one that calls `Router` methods. `HubCmd`:
+Hub (taky-server, dev01 since S-312) is the only one that calls `Router` methods. `HubCmd`:
 `Connected{handle, reply: oneshot<ConnectVerdict /* Accepted | Banned */>}`, `Event{id, event: Box<Event>}`
 (boxed: clippy `large_enum_variant`, keeps the queue slot small), `Disconnected{id}`, `Mgmt{req, oneshot}`, `Tick`,
-and with feature `testkit` — `Settle{reply}` (barrier behind `HubHandle::settle()`).
+and with feature `testkit` — `Settle{reply}` (barrier behind `HubHandle::settle()`: everything sent before it is
+processed and the resulting frames are written+flushed, bounded by `SETTLE_TIMEOUT`; it does not see bytes still in flight
+client→server) and `PersistSnapshot{reply}` (behind `HubHandle::persist_snapshot() -> Vec<Arc<Event>>`, S-312).
+
+taky-server public surface after T-23 (S-312..S-314, review-3C):
+```rust
+pub struct ConnOutbox;   // conn.rs: impl Outbox; 8 MiB AND 4096 frames, counted until written+flushed; a single frame
+                         // into an EMPTY queue is always accepted (> 8 MiB possible: 4 MiB input × lxml &#NNN; growth);
+                         // try_send/close never block; close idempotent, first reason wins
+impl ConnOutbox { pub fn new() -> (Arc<ConnOutbox>, mpsc::UnboundedReceiver<Frame>); pub fn close_reason(&self) -> Option<&str>;
+                  pub fn is_closed(&self) -> bool; pub fn queued_bytes(&self) -> usize; }
+// conn::{CLIENT_DISCONNECTED, XML_SYNTAX_ERROR, USER_BANNED = "User banned" (spec §4.3), BANNED = "Banned" (kickban),
+//        HANDSHAKE_TIMED_OUT, SHUTTING_DOWN, WRITE_TIMED_OUT}
+// limits::{HUB_QUEUE 1024, OUTBOX_MAX_BYTES, OUTBOX_MAX_FRAMES, HANDSHAKE_TIMEOUT 10 s, WRITE_TIMEOUT 30 s, TICK_INTERVAL 1 s,
+//          READ_CHUNK 4096 (= recv(4096), one chunk = one decoder feed), CLOSE_TIMEOUT 2 s (shutdown/close_notify),
+//          SETTLE_TIMEOUT 5 s (testkit)}
+pub struct Listeners { pub cot: TcpListener, pub monitor: Option<TcpListener>, pub mgmt: Option<UnixListener> } // S-313
+impl Listeners { pub async fn bind(cfg: &TakyConfig) -> io::Result<Listeners>; }  // S-314, spec §2 order
+pub const MGMT_SOCK_NAME: &str = "taky-mgmt.sock";
+pub struct ServerOptions { pub cfg: Arc<TakyConfig>, pub clock: SharedClock, pub shutdown: Shutdown }
+pub async fn start(opts: ServerOptions, l: Listeners) -> anyhow::Result<RunningServer>; // removes the mgmt file on error
+impl RunningServer { pub async fn join(self) -> anyhow::Result<()>; }  // Err after a Hub panic (shutdown is triggered)
+pub mod mgmt { pub enum MgmtRequest { Status, Ping, Kickban{user: Option<String>}, Invalid{cmd: String} }
+               impl MgmtRequest { pub fn parse(&[u8]) -> Result<Self, String>; pub fn invalid_reply(&str) -> Value; }
+               pub fn reply_frame(&Value) -> Vec<u8>;  pub const MGMT_MAX_FRAME: usize = 1 MiB; }
+pub mod cli { pub struct Args; pub fn try_parse_from(..); pub enum ConfigFailure { Usage, Config }
+              /* classify(cfg_file, &ConfigError), exit_code() (2 | 1), render(argv0) */ }
+```
 Feature `testkit` (never enabled in release binaries; qa01 A.2): `FakeClock`, `taky_cot::testkit::TestOutbox`,
 `Router::persist_snapshot()`, `Router::find_clients(..)`, `HubHandle::settle()`. Server and DPS start on ready
 listeners: `taky_server::start(ServerOptions, Listeners)`, `taky_dps::start(DpsOptions, TcpListener)` (qa01 A.3).
-(§14 updated after the T-10 review, arch01/handoff/review-T-10.md, after the 3A review, arch01/handoff/review-3A.md, and after the 3B review, arch01/handoff/review-3B.md.)
+(§14 updated after the T-10 review, arch01/handoff/review-T-10.md, after the 3A review, arch01/handoff/review-3A.md, after the 3B review, arch01/handoff/review-3B.md, and after the 3C review, arch01/handoff/review-3C.md.)
 dev01 tests use `TestOutbox` (VecDeque) — no tokio network.
 
 ---
@@ -610,12 +663,12 @@ with a comment and arch01 review; `[sources] unknown-registry = "deny"`, `unknow
 |---|---|---|---|
 | D-1 | `/Marti/vcm` parses XML with `resolve_entities=True` (XXE: reading local files) | DTD/entities are forbidden → 400 "Malformed XML" | security |
 | D-2 | CoT event size is unlimited (TODO), top-level non-`event` elements accumulate in memory (lxml leak) | limits §6, garbage is not stored | memory, DoS |
-| D-3 | a slow client's `out_buff` grows without bound | disconnect on queue overflow | memory (Pi) |
+| D-3 | a slow client's `out_buff` grows without bound; a mgmt request without `\0` is buffered without bound | disconnect on queue overflow; mgmt frame > 1 MiB ⇒ mgmt connection closed (review-3C) | memory (Pi) |
 | D-4 | Redis `KEYS` | `SCAN` (the same set of keys) | do not block Redis |
 | D-5 | Redis `SET`+`EXPIRE` | `SET … EX` (the same data) | atomicity |
 | D-6 | gunicorn `2*CPU+1` processes | 1 tokio process | memory; HTTP behavior is the same |
 | D-7 | PDB on SIGUSR1 / `-d` | the flag is accepted, ignored | no equivalent |
-| D-8 | event without `version`/`how`: TypeError on serialization, poisons memory-persist, server crash on replay (B2, V013) | not delivered (as Python), **not persisted**, ERROR log + `__taky_err`, the server keeps running | crash |
+| D-8 | event without `version`/`how`: TypeError on serialization, poisons memory-persist, server crash on replay (B2, V013); log_cot gets a `__taky_err` record only if ≥1 recipient (route raised), else WARNING and no record | not delivered (as Python), **not persisted**, ERROR log + `__taky_err`, the server keeps running; log_cot always writes the `__taky_err` record (review-3B N-1 / review-3C) | crash |
 | D-9 | an open mgmt connection ⇒ all CoT is dropped (B3, V046) | mgmt does not affect traffic | traffic loss |
 | D-10 | mgmt: a non-object JSON ⇒ server crash (B4, V051) | `{"error": "Invalid cmd: None"}` | crash |
 | D-11 | cert-db is read once (server, DPS); writing overwrites from memory (clobbers others' writes) (B5, OQ-04/C3/D2) | re-read on mtime change; write = read-modify-write under `flock` + tmp+rename; same format | data loss, kickban without a DPS restart |
@@ -632,6 +685,7 @@ with a comment and arch01 review; `[sources] unknown-registry = "deny"`, `unknow
 | D-22 | DPS `hash` is put into `meta/<hash>.json` unvalidated — arbitrary file read, symlink/unlink outside `meta/` (qa01 T-06) | `hash` validated (`^[A-Za-z0-9._-]+$`, no `..`), otherwise 400 `Invalid hash` (spec DC §3.2a) | vulnerability (approved ADR-008/G-8) |
 | D-23 | after an unknown entity `&foo;` libxml2 also drops the rest of that recv chunk and restarts as a bare document (the 2nd next top-level element ⇒ "Extra content" ⇒ disconnect; segmentation-dependent, Q11/V054); a bare `&` / `&#65` without `;` in text ⇒ the parser stops forever, socket stays open (zombie, B10/V055) | only the enclosing event is dropped (as Python), parsing continues with the next event; a malformed reference in text ⇒ disconnect "XML Syntax Error" (as `&` in an attribute / `&#0;` already do in Python, V056) | determinism, resource leak (S-305; pending pm01/customer confirmation) |
 | D-24 | mgmt: invalid JSON/UTF-8 frame ⇒ `{"error": "<CPython json/codec exception text>"}` (V045 step 6) | same reply shape and behavior (one reply, connection stays); the text is the `serde_json` error `Display` (e.g. `key must be a string at line 1 column 2`) — not normative (spec CS mgmt table) | no CPython-json emulation (S-305; pending pm01/customer confirmation) |
+| D-n (cand. 3C-1, an01 to number) | mgmt `kickban`: a cert-db write error (`revoke_certificate`) is an unhandled exception in the select loop ⇒ the server exits 1 | ERROR `Unable to revoke certificate for <user> (SN: %040x): <err>`; that serial is not in `revoked_sns`, its peers are not kicked, the server keeps running; the in-memory db is unchanged | crash (review-3C; pending pm01/customer confirmation) |
 
 Not fixed (bug-compat, visible to clients/data) — the full list R is in `shared/spec/compat-matrix.md` §2: the double
 slash in DPS URLs, `Teams.UNKNOWN == CYAN`, an unknown entity ⇒ the event is silently lost (libxml2 2.14; its after-effects — D-23), `<track>` without
