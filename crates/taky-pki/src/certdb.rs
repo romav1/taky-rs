@@ -5,6 +5,8 @@
 //! Locking: an exclusive `flock` on the sidecar `<cert_db>.lock` (the data file itself is
 //! replaced by rename, so it cannot carry the lock). Readers do not lock: rename is atomic.
 //! Python takyctl does not lock at all, so it can still race with us (OQ-C3, risk R5).
+//! The wait for the lock is bounded by [`LOCK_WAIT`] (ADR-003 errata §5(c)): after it a write fails
+//! with `PkiError::Io` (`EWOULDBLOCK`) instead of blocking the caller (the CoT Hub's kickban).
 //!
 //! Ownership (ADR-003 errata §4, review-3D B-1): Python rewrites the file in place, so its owner
 //! never changes. We replace it, so as root (`sudo takyctl-rs`) the tmp file and a newly created
@@ -17,9 +19,10 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{ErrorKind, Write};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
 use chrono::NaiveDateTime;
+use nix::errno::Errno;
 use nix::fcntl::{Flock, FlockArg};
 use x509_parser::prelude::{FromDer, X509Certificate};
 
@@ -355,13 +358,46 @@ fn open_lock(lp: &Path, owner: Option<(u32, u32)>) -> Result<File, PkiError> {
     OpenOptions::new().read(true).open(lp).map_err(io_err(lp))
 }
 
+/// Upper bound of the exclusive `flock` wait (ADR-003 errata §5(c), review-3C N-3): the CoT Hub
+/// awaits kickban, so a stalled lock holder (e.g. a suspended `takyctl-rs`) must not stop routing.
+pub const LOCK_WAIT: Duration = Duration::from_secs(5);
+/// Poll interval of the non-blocking `flock` retries.
+const LOCK_POLL: Duration = Duration::from_millis(50);
+
 fn lock(path: &Path) -> Result<Flock<File>, PkiError> {
+    lock_within(path, LOCK_WAIT)
+}
+
+/// Poll `LOCK_EX|LOCK_NB` until `wait` has elapsed, then fail with `PkiError::Io` whose source is
+/// `EWOULDBLOCK` (`ErrorKind::WouldBlock`); the callers log it as ERROR. `EINTR` is retried.
+fn lock_within(path: &Path, wait: Duration) -> Result<Flock<File>, PkiError> {
     let lp = sidecar(path, ".lock");
-    let f = open_lock(&lp, owner_of(path))?;
-    Flock::lock(f, FlockArg::LockExclusive).map_err(|(_, e)| PkiError::Io {
-        path: lp,
-        source: std::io::Error::from(e),
-    })
+    let mut f = open_lock(&lp, owner_of(path))?;
+    let deadline = Instant::now() + wait;
+    loop {
+        match Flock::lock(f, FlockArg::LockExclusiveNonblock) {
+            Ok(l) => return Ok(l),
+            Err((back, e)) if e == Errno::EWOULDBLOCK || e == Errno::EINTR => {
+                let now = Instant::now();
+                if e == Errno::EWOULDBLOCK && now >= deadline {
+                    return Err(PkiError::Io {
+                        path: lp,
+                        source: std::io::Error::from(e),
+                    });
+                }
+                f = back;
+                if e == Errno::EWOULDBLOCK {
+                    std::thread::sleep(LOCK_POLL.min(deadline - now));
+                }
+            }
+            Err((_, e)) => {
+                return Err(PkiError::Io {
+                    path: lp,
+                    source: std::io::Error::from(e),
+                });
+            }
+        }
+    }
 }
 
 fn upsert(records: &mut Vec<CertRecord>, rec: CertRecord) {
@@ -636,6 +672,65 @@ R\t2026-10-16T19:03:45\t2026-10-18T19:04:40.195511\t3674ed1632305d915641de243191
         assert_eq!(db.records().len(), 2);
         fs::write(&p, "V\tnope\t2027-01-01T00:00:00\t01\tx\n").expect("write");
         assert!(db.refresh().is_some());
+    }
+
+    /// Holds the exclusive lock on `<p>.lock` through a separate open file description (as another
+    /// writer process would).
+    fn hold_lock(p: &Path) -> Flock<File> {
+        let f = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(false)
+            .open(sidecar(p, ".lock"))
+            .expect("open lock");
+        Flock::lock(f, FlockArg::LockExclusiveNonblock).expect("hold lock")
+    }
+
+    /// review-3C N-3: a revoke against a lock held elsewhere fails with `Io(WouldBlock)` after
+    /// [`LOCK_WAIT`] instead of blocking forever; the database is left untouched.
+    #[test]
+    fn held_lock_bounds_revoke_wait() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let p = dir.path().join("cert-db.txt");
+        fs::write(&p, SAMPLE).expect("write");
+        let mut db = CertDb::open(&p).expect("open");
+        let sn = db.records()[0].serial.clone();
+        let held = hold_lock(&p);
+        let (tx, rx) = std::sync::mpsc::channel();
+        let start = Instant::now();
+        std::thread::spawn(move || {
+            let r = db.revoke(&sn, dt("2030-01-01T00:00:00"));
+            let _ = tx.send((r, start.elapsed()));
+        });
+        let (r, took) = rx
+            .recv_timeout(LOCK_WAIT + Duration::from_secs(10))
+            .expect("revoke did not return: unbounded flock wait");
+        drop(held);
+        match r {
+            Err(PkiError::Io { path, source }) => {
+                assert_eq!(source.kind(), ErrorKind::WouldBlock, "{source}");
+                assert_eq!(path, sidecar(&p, ".lock"));
+            }
+            other => panic!("expected Io(WouldBlock), got {other:?}"),
+        }
+        assert!(took >= LOCK_WAIT, "gave up early: {took:?}");
+        assert_eq!(fs::read_to_string(&p).expect("read"), SAMPLE);
+    }
+
+    /// A lock released while a writer polls is taken (the wait is a retry loop, not a single try).
+    #[test]
+    fn lock_released_during_wait_is_taken() {
+        let dir = tempfile::tempdir().expect("tmp");
+        let p = dir.path().join("cert-db.txt");
+        let held = hold_lock(&p);
+        assert!(lock_within(&p, Duration::ZERO).is_err(), "lock is held");
+        let releaser = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(200));
+            drop(held);
+        });
+        lock_within(&p, Duration::from_secs(3)).expect("lock after release");
+        releaser.join().expect("join");
     }
 
     fn self_signed() -> Vec<u8> {
