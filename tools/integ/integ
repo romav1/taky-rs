@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# S-403 integration harness entry point (qa01, T-31 part 1): TLS / monitor / mgmt / process, Python taky vs taky-rs.
+# Opt-in (not run by scripts/check.sh). Uses the tools/pyref venv (cryptography, lxml) and openssl s_client.
+#   cd taky-rs && cargo build -p taky-server --bin taky-rs -p takyctl && tools/integ/integ [--only tls,monitor,mgmt,process]
+set -euo pipefail
+INTEG_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "$INTEG_DIR/../pyref/common.sh"   # PY, TAKY_SRC, PYTHONDONTWRITEBYTECODE=1
+[[ -x "$PY" ]] || "$PYREF_DIR/venv.sh"
+unset PYTHONPATH
+exec "$PY" -B -I "$INTEG_DIR/integ.py" "$@"
