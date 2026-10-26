@@ -36,6 +36,7 @@ tracing.workspace = true
 [dev-dependencies]
 assert_cmd.workspace = true
 taky-common = { workspace = true, features = ["testkit"] }
+nix.workspace = true
 rcgen.workspace = true
 rustls.workspace = true
 tempfile.workspace = true

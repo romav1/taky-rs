@@ -372,10 +372,15 @@ impl Hub {
             }
         };
         self.cert_db = Some(db);
-        let Ok((refresh_err, results)) = out else {
+        let Ok(out) = out else {
             pylog!(LGR, Level::ERROR, "kickban failed: task panicked");
             return json!({ "revoked_sns": revoked });
         };
+        let KickbanResult {
+            refresh_err,
+            results,
+            skipped,
+        } = out;
         if let Some(e) = refresh_err {
             pylog!(LGR, Level::WARN, "Unable to re-read cert-db: {e}");
         }
@@ -412,17 +417,49 @@ impl Hub {
                 self.router.client_disconnect(id);
             }
         }
+        if !skipped.is_empty() {
+            for sn in &skipped {
+                pylog!(
+                    "MgmtClient",
+                    Level::ERROR,
+                    "Unable to revoke certificate for {user} (SN: {}): cert-db lock busy, not attempted",
+                    hex40(sn)
+                );
+            }
+            pylog!(
+                "MgmtClient",
+                Level::ERROR,
+                "kickban {user}: {} certificate(s) not revoked after a cert-db lock timeout",
+                skipped.len()
+            );
+        }
         json!({ "revoked_sns": revoked })
     }
 }
 
-/// Result of [`kickban_blocking`]: the refresh error and each revoke attempt.
-type KickbanResult = (Option<PkiError>, Vec<(Vec<u8>, Result<(), PkiError>)>);
+/// Result of [`kickban_blocking`].
+struct KickbanResult {
+    /// The cert-db re-read error, if any.
+    refresh_err: Option<PkiError>,
+    /// Each revoke attempted, in cert-db order.
+    results: Vec<(Vec<u8>, Result<(), PkiError>)>,
+    /// Live serials not attempted after a lock timeout (review-3E N-1).
+    skipped: Vec<Vec<u8>>,
+}
 
 #[cfg(test)]
 static KICKBAN_PANIC: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
+/// Test hook: run once after the first successful revoke in the cert-db at this path.
+#[cfg(test)]
+type AfterRevokeHook = (PathBuf, Box<dyn FnOnce() + Send>);
+#[cfg(test)]
+static KICKBAN_AFTER_REVOKE: std::sync::Mutex<Option<AfterRevokeHook>> =
+    std::sync::Mutex::new(None);
+
 /// The blocking part of `kickban`: re-read the cert-db if changed, revoke `name`'s live records.
+/// After the first lock timeout (`WouldBlock`, [`taky_pki::certdb::LOCK_WAIT`]) the remaining
+/// serials are not attempted, so the Hub stalls for at most one lock wait (review-3E N-1).
 fn kickban_blocking(db: &mut CertDb, name: &str, when: NaiveDateTime) -> KickbanResult {
     let refresh_err = db.refresh();
     #[cfg(test)]
@@ -434,14 +471,33 @@ fn kickban_blocking(db: &mut CertDb, name: &str, when: NaiveDateTime) -> Kickban
         .filter(|r| r.status != CertStatus::Revoked)
         .map(|r| r.serial.clone())
         .collect();
-    let results = serials
-        .into_iter()
-        .map(|sn| {
-            let r = db.revoke(&sn, when);
-            (sn, r)
-        })
-        .collect();
-    (refresh_err, results)
+    let mut results = Vec::with_capacity(serials.len());
+    let mut serials = serials.into_iter();
+    for sn in serials.by_ref() {
+        let r = db.revoke(&sn, when);
+        let lock_busy = matches!(
+            &r,
+            Err(PkiError::Io { source, .. }) if source.kind() == std::io::ErrorKind::WouldBlock
+        );
+        #[cfg(test)]
+        if r.is_ok() {
+            let mut hook = KICKBAN_AFTER_REVOKE
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if let Some((_, f)) = hook.take_if(|(p, _)| p.as_path() == db.path()) {
+                f();
+            }
+        }
+        results.push((sn, r));
+        if lock_busy {
+            break;
+        }
+    }
+    KickbanResult {
+        refresh_err,
+        results,
+        skipped: serials.collect(),
+    }
 }
 
 /// A float as Python prints it (`5.0`, not `5`).
@@ -560,6 +616,87 @@ mod tests {
             ConnectVerdict::Accepted
         );
         assert!(hub.cert_db.is_some() && hub.cert_db_lost.is_none());
+    }
+
+    /// review-3E N-1: under a held `<cert_db>.lock` kickban gives up after the first lock
+    /// timeout: the Hub stalls ~one `LOCK_WAIT` (not one per live cert), the cert revoked before
+    /// the lock was taken is still reported and its session kicked, the rest stay valid.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn kickban_stops_after_first_lock_timeout() {
+        use nix::fcntl::{Flock, FlockArg};
+        use taky_pki::certdb::LOCK_WAIT;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cert-db.txt");
+        std::fs::write(
+            &path,
+            "V\t2026-01-01T00:00:00\t2027-01-01T00:00:00\t0b\tbob\n\
+             V\t2026-01-01T00:00:00\t2027-01-01T00:00:00\t0c\tbob\n\
+             V\t2026-01-01T00:00:00\t2027-01-01T00:00:00\t0d\tbob\n\
+             V\t2026-01-01T00:00:00\t2027-01-01T00:00:00\t0e\tbob\n",
+        )
+        .unwrap();
+        let clock =
+            FakeClock::new(taky_cot::isoparse::isoparse("2030-01-01T00:00:00Z").unwrap()).shared();
+        let router = Router::new(-1, Persistence::memory(clock.clone()), clock.clone());
+        let mut hub = Hub::new(router, Some(CertDb::open(&path).unwrap()), clock).0;
+        let mut outboxes = Vec::new();
+        for (id, sn) in [(1u64, 0x0bu8), (2, 0x0c)] {
+            let (ob, _rx) = ConnOutbox::new();
+            outboxes.push(ob.clone());
+            let verdict = hub
+                .connect(ClientHandle {
+                    id: ClientId(id),
+                    kind: ClientKind::Cot,
+                    outbox: ob,
+                    stats: Arc::new(ClientStats::new(0.0)),
+                    addr: None,
+                    peer_serial: Some(vec![sn]),
+                })
+                .await;
+            assert_eq!(verdict, ConnectVerdict::Accepted);
+        }
+
+        // Another process takes the lock right after the first revoke (0b).
+        let held: Arc<std::sync::Mutex<Option<Flock<std::fs::File>>>> = Arc::default();
+        let (lock_path, slot) = (dir.path().join("cert-db.txt.lock"), held.clone());
+        *KICKBAN_AFTER_REVOKE.lock().unwrap() = Some((
+            path.clone(),
+            Box::new(move || {
+                let f = std::fs::OpenOptions::new()
+                    .read(true)
+                    .write(true)
+                    .create(true)
+                    .truncate(false)
+                    .open(lock_path)
+                    .unwrap();
+                *slot.lock().unwrap() =
+                    Some(Flock::lock(f, FlockArg::LockExclusiveNonblock).unwrap());
+            }),
+        ));
+
+        let start = std::time::Instant::now();
+        let out = hub.kickban(Some("bob")).await;
+        let took = start.elapsed();
+        assert_eq!(out, json!({"revoked_sns": [11]}));
+        assert!(took >= LOCK_WAIT, "no lock wait: {took:?}");
+        assert!(took < LOCK_WAIT * 2, "stalled once per cert: {took:?}");
+        assert_eq!(outboxes[0].close_reason(), Some(BANNED));
+        assert!(!outboxes[1].is_closed());
+        let ids: Vec<u64> = hub.router.clients().map(|(h, _)| h.id.0).collect();
+        assert_eq!(ids, vec![2]);
+        let text = std::fs::read_to_string(&path).unwrap();
+        let status: Vec<&str> = text.lines().map(|l| &l[..1]).collect();
+        assert_eq!(status, ["R", "V", "V", "V"]);
+
+        // Lock released: the next kickban revokes the rest and kicks 0c.
+        drop(held.lock().unwrap().take());
+        assert_eq!(
+            hub.kickban(Some("bob")).await,
+            json!({"revoked_sns": [12, 13, 14]})
+        );
+        assert_eq!(outboxes[1].close_reason(), Some(BANNED));
+        assert_eq!(hub.router.clients().count(), 0);
     }
 
     #[test]
