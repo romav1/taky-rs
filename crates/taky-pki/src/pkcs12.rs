@@ -44,6 +44,9 @@ pub const MAC_ITERATIONS: u32 = 2048;
 pub const PBE_ITERATIONS: u32 = 1;
 /// Salt length of every PBE and of the MAC.
 pub const SALT_LEN: usize = 8;
+/// Largest MAC / PBE iteration count [`parse`] accepts (review-3E N-3): a crafted file must not
+/// spin the PKCS#12 KDF for hours. Real writers use ≤ a few 10^5 (`cryptography`: 2048 / 1).
+pub const MAX_ITERATIONS: u32 = 1_000_000;
 
 const OID_DATA: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x07, 0x01];
 const OID_ENCRYPTED_DATA: &[u8] = &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x07, 0x06];
@@ -127,6 +130,17 @@ pub fn serialize_with_salts(
     password: &str,
     salts: &Salts,
 ) -> Result<Vec<u8>, PkiError> {
+    serialize_inner(input, password, salts, PBE_ITERATIONS, MAC_ITERATIONS)
+}
+
+/// The encoder with explicit iteration counts (the public API always uses anc.py's 1 / 2048).
+fn serialize_inner(
+    input: &P12Input<'_>,
+    password: &str,
+    salts: &Salts,
+    pbe_iterations: u32,
+    mac_iterations: u32,
+) -> Result<Vec<u8>, PkiError> {
     let pw = bmp_password(password)?;
     let local_key_id = input.key_pkcs8.map(|_| Sha1::digest(input.cert).to_vec());
 
@@ -136,7 +150,7 @@ pub fn serialize_with_salts(
         cert_bags.push(cert_bag(ca.der, ca.friendly_name, None));
     }
     let certs_plain = tlv(T_SEQ, &cert_bags.concat());
-    let certs_ct = pbe_encrypt(&pw, &salts.certs, PBE_ITERATIONS, &certs_plain)?;
+    let certs_ct = pbe_encrypt(&pw, &salts.certs, pbe_iterations, &certs_plain)?;
     let encrypted_data = tlv(
         T_SEQ,
         &[
@@ -145,7 +159,7 @@ pub fn serialize_with_salts(
                 T_SEQ,
                 &[
                     tlv(T_OID, OID_DATA),
-                    pbe_alg(&salts.certs, PBE_ITERATIONS),
+                    pbe_alg(&salts.certs, pbe_iterations),
                     tlv(T_CTX0_PRIM, &certs_ct),
                 ]
                 .concat(),
@@ -160,10 +174,10 @@ pub fn serialize_with_salts(
 
     // Key: one pkcs8ShroudedKeyBag in a plain `data` SafeContents.
     if let Some(key) = input.key_pkcs8 {
-        let ct = pbe_encrypt(&pw, &salts.key, PBE_ITERATIONS, key)?;
+        let ct = pbe_encrypt(&pw, &salts.key, pbe_iterations, key)?;
         let epki = tlv(
             T_SEQ,
-            &[pbe_alg(&salts.key, PBE_ITERATIONS), tlv(T_OCTET, &ct)].concat(),
+            &[pbe_alg(&salts.key, pbe_iterations), tlv(T_OCTET, &ct)].concat(),
         );
         let bag = safe_bag(
             OID_SHROUDED_KEY_BAG,
@@ -174,7 +188,7 @@ pub fn serialize_with_salts(
     }
 
     let auth_safe = tlv(T_SEQ, &safes.concat());
-    let mac_key = kdf(&pw, &salts.mac, 3, MAC_ITERATIONS, 20);
+    let mac_key = kdf(&pw, &salts.mac, 3, mac_iterations, 20);
     let mut mac = Hmac::<Sha1>::new_from_slice(&mac_key)
         .map_err(|e| PkiError::Invalid(format!("HMAC key: {e}")))?;
     mac.update(&auth_safe);
@@ -191,7 +205,7 @@ pub fn serialize_with_salts(
                 .concat(),
             ),
             tlv(T_OCTET, &salts.mac),
-            int(MAC_ITERATIONS),
+            int(mac_iterations),
         ]
         .concat(),
     );
@@ -364,6 +378,11 @@ impl Pfx {
 }
 
 /// Parses a p12, verifies the HMAC-SHA1 MAC and decrypts every part (3DES PBE only).
+///
+/// **Test / QA reader, not for untrusted input** (review-3E N-3): production code never reads
+/// p12 files; this exists to check what [`serialize`] and `anc.py` write. Hardening is limited
+/// to bounds-checked DER and a cap on the MAC and PBE iteration counts ([`MAX_ITERATIONS`],
+/// checked before any KDF run → `PkiError::Invalid("PKCS#12: … iterations … exceed …")`).
 pub fn parse(data: &[u8], password: &str) -> Result<Pfx, PkiError> {
     let pw = bmp_password(password)?;
     let mut pfx = Rd::new(Rd::new(data).expect(T_SEQ)?);
@@ -384,6 +403,7 @@ pub fn parse(data: &[u8], password: &str) -> Result<Pfx, PkiError> {
     } else {
         mac_data.integer()?
     };
+    check_iterations("MAC", mac_iterations)?;
     let mac_key = kdf(&pw, &mac_salt, 3, mac_iterations, 20);
     let mut h = Hmac::<Sha1>::new_from_slice(&mac_key)
         .map_err(|e| PkiError::Invalid(format!("HMAC key: {e}")))?;
@@ -489,6 +509,7 @@ fn read_pbe(alg_id: &[u8]) -> Result<Pbe, PkiError> {
     let mut p = Rd::new(a.expect(T_SEQ)?);
     let salt = p.expect(T_OCTET)?.to_vec();
     let iterations = p.integer()?;
+    check_iterations("PBE", iterations)?;
     Ok(Pbe {
         oid,
         salt,
@@ -668,6 +689,16 @@ fn attributes(name: Option<&str>, local_key_id: Option<&[u8]>) -> Vec<Vec<u8>> {
 // --------------------------------------------------------------------------------------------
 // DER reading (definite lengths, single-byte tags — what DER p12 writers produce)
 
+/// Rejects iteration counts above [`MAX_ITERATIONS`] before the KDF runs.
+fn check_iterations(what: &str, n: u32) -> Result<(), PkiError> {
+    if n > MAX_ITERATIONS {
+        return Err(bad(&format!(
+            "{what} iterations {n} exceed the limit {MAX_ITERATIONS}"
+        )));
+    }
+    Ok(())
+}
+
 fn bad(msg: &str) -> PkiError {
     PkiError::Invalid(format!("PKCS#12: {msg}"))
 }
@@ -793,6 +824,80 @@ mod tests {
         assert_eq!(r.integer().expect("int"), 2048);
         assert!(read_tlv(&[0x30, 0x80, 0, 0]).is_err());
         assert!(read_tlv(&[0x30, 5, 0]).is_err());
+    }
+
+    #[test]
+    fn iteration_cap() {
+        let cert = b"\x30\x03\x02\x01\x01".to_vec();
+        let key = b"\x30\x03\x02\x01\x00".to_vec();
+        let input = P12Input {
+            name: Some("JENNY"),
+            key_pkcs8: Some(&key),
+            cert: &cert,
+            cas: &[],
+        };
+        let salts = Salts {
+            certs: [1; 8],
+            key: [2; 8],
+            mac: [3; 8],
+        };
+        let mk = |pbe, mac| serialize_inner(&input, "atakatak", &salts, pbe, mac).expect("p12");
+        // At / below the limit: accepted (a full 10^6-round parse is too slow for a debug test).
+        assert!(check_iterations("MAC", MAX_ITERATIONS).is_ok());
+        let p = parse(&mk(1000, 1000), "atakatak").expect("below the cap");
+        assert_eq!(p.mac_iterations, 1000);
+        // Above the limit: rejected before the KDF. The MAC case uses a junk-MAC file whose
+        // KDF would take ~2^32 rounds (u32::MAX); returning promptly shows the cap runs first.
+        let mut huge = mk(1, 1);
+        let n = huge.len();
+        assert_eq!(huge[n - 3..], [2, 1, 1]);
+        huge.truncate(n - 3);
+        huge.extend_from_slice(&[2, 5, 0, 0xff, 0xff, 0xff, 0xff]);
+        // Fix the lengths of macData (SEQ, short form) and the PFX (SEQ, long form).
+        // macData = SEQ(48) { digestInfo SEQ(33), OCTET(8) salt, INTEGER(1) } = 50 bytes.
+        let mac_seq = n - 50;
+        assert_eq!(huge[mac_seq..mac_seq + 2], [0x30, 48]);
+        huge[mac_seq + 1] += 4;
+        assert_eq!(huge[..2], [0x30, 0x82]);
+        let outer = u16::from_be_bytes([huge[2], huge[3]]) + 4;
+        huge[2..4].copy_from_slice(&outer.to_be_bytes());
+        let t = std::time::Instant::now();
+        let e = parse(&huge, "atakatak").expect_err("MAC over the cap");
+        assert!(t.elapsed() < std::time::Duration::from_secs(5));
+        assert!(
+            e.to_string()
+                .contains("MAC iterations 4294967295 exceed the limit 1000000"),
+            "{e}"
+        );
+        // PBE: encode 32768 (02 03 00 80 00), raise the certs' count in place to 0x7f8000
+        // (same length), then recompute the MAC (1 round) over the patched authSafe so that the
+        // PBE check, not the MAC, is what rejects the file.
+        let mut big = mk(0x8000, 1);
+        let pat = [&[4u8, 8][..], &[1; 8], &[2, 3, 0, 0x80, 0]].concat();
+        let at = big
+            .windows(pat.len())
+            .position(|w| w == pat)
+            .expect("certs PBE");
+        big[at + 12] = 0x7f;
+        let auth_safe = {
+            let mut pfx = Rd::new(Rd::new(&big).expect(T_SEQ).expect("pfx"));
+            pfx.integer().expect("version");
+            data_content(pfx.expect(T_SEQ).expect("ci"))
+                .expect("authSafe")
+                .to_vec()
+        };
+        let pw = bmp_password("atakatak").expect("pw");
+        let mut h = Hmac::<Sha1>::new_from_slice(&kdf(&pw, &salts.mac, 3, 1, 20)).expect("hmac");
+        h.update(&auth_safe);
+        let n = big.len();
+        // MAC OCTET content: last 50 bytes = macData; 2 + 2 + 11 + 2 header/alg bytes precede it.
+        big[n - 33..n - 13].copy_from_slice(&h.finalize().into_bytes());
+        let e = parse(&big, "atakatak").expect_err("PBE over the cap");
+        assert!(
+            e.to_string()
+                .contains("PBE iterations 8355840 exceed the limit 1000000"),
+            "{e}"
+        );
     }
 
     #[test]
