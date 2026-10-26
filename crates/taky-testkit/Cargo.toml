@@ -18,9 +18,15 @@ name = "taky-rs-difftest"
 path = "src/bin/taky-rs-difftest.rs"
 required-features = ["difftest"]
 
+[[bin]]
+name = "taky-rs-unit"
+path = "src/bin/taky-rs-unit.rs"
+required-features = ["difftest"]
+
 [dependencies]
 taky-common.workspace = true
 taky-config.workspace = true
+taky-cot.workspace = true
 taky-server.workspace = true
 tokio.workspace = true
 chrono.workspace = true

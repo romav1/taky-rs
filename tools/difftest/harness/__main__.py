@@ -7,6 +7,7 @@ difftest — differential test harness Python taky <-> taky-rs (qa01, T-11; test
     tools/difftest/difftest --target rs --rs-cot bin --only V   # ... vs the plain taky-rs binary
     tools/difftest/difftest --target py --only V04,D01   # subset by id prefix
     tools/difftest/difftest --target py shared/spec/vectors/cot/V001.json ...
+    tools/difftest/difftest random --sessions 1000 --seed 1   # seeded random sessions (randsession.py)
 
 For every selected vector the baseline (Python) and the target are each started as LIVE processes
 (Python on 127.0.0.2, Rust on 127.0.0.3) and driven over real sockets. Two kinds of checks:
@@ -150,6 +151,10 @@ def junit(path, rows, elapsed):
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "random":  # seeded random sessions (S-402)
+        from . import randsession
+
+        return randsession.main(sys.argv[2:])
     ap = argparse.ArgumentParser(prog="difftest", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("vectors", nargs="*", help="vector files (default with --all: cot/ dps/ unit/)")

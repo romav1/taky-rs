@@ -3,7 +3,7 @@ Targets = the servers under test. A target knows how to start/stop its processes
 offers the test hooks; everything on the wire is driven by cot.py / dps.py, identically for all targets.
 
   py  — the ORIGINAL Python taky 0.9 (read-only ../taky, venv from tools/pyref), bind_ip 127.0.0.2
-  rs  — taky-rs / taky_dps-rs, bind_ip 127.0.0.3 — DPS (S-319), CoT (S-315); unit N/A until T-30
+  rs  — taky-rs / taky_dps-rs, bind_ip 127.0.0.3 — DPS (S-319), CoT (S-315), unit (S-402: taky-rs-unit)
         CoT runs one of two Rust processes (--rs-cot):
           launcher  taky-rs-difftest (crates/taky-testkit, feature difftest): the real server code
                     (taky_server::start on Listeners::bind) + FakeClock at the vector's `now` + the
@@ -231,7 +231,8 @@ class RsTarget:
       DPS  taky_dps-rs         (cargo build -p taky-dps --bin taky_dps-rs)
       CoT  taky-rs-difftest    (cargo build -p taky-testkit --features difftest --bin taky-rs-difftest)
            or taky-rs with --rs-cot bin (cargo build -p taky-server --bin taky-rs)
-    Unit: not wired yet (T-30 needs a unit adapter); such vectors are reported N/A, not run.
+    Unit: taky-rs-unit (cargo build -p taky-testkit --features difftest --bin taky-rs-unit), same
+          contract as pyunit.py (argv: vector paths, stdout: {id: [observation per case]}).
     """
 
     name = "rs"
@@ -239,7 +240,7 @@ class RsTarget:
 
     def __init__(self, ip, bin_dir=None, cot_mode="launcher"):
         self.ip = ip
-        self.bin_dir = bin_dir or os.path.abspath(os.path.join(HERE, "..", "..", "..", "target", "debug"))
+        self.bin_dir = os.path.abspath(bin_dir or os.path.join(HERE, "..", "..", "..", "target", "debug"))
         self.dps_exe = os.path.join(self.bin_dir, "taky_dps-rs")
         self.cot_mode = cot_mode
         self.cot_exe = os.path.join(self.bin_dir, "taky-rs" if cot_mode == "bin" else "taky-rs-difftest")
@@ -261,8 +262,13 @@ class RsTarget:
                                     "(use --rs-cot launcher)")
         return RsCot(self, workdir)
 
-    def run_unit(self, *_a, **_k):
-        raise TargetUnavailable("rust unit adapter not wired into difftest yet (T-30)")
+    def run_unit(self, paths):
+        exe = os.path.join(self.bin_dir, "taky-rs-unit")
+        if not os.access(exe, os.X_OK):
+            raise TargetUnavailable(f"{exe} not found "
+                                    "(cargo build -p taky-testkit --features difftest --bin taky-rs-unit)")
+        out = subprocess.run([exe, *paths], capture_output=True, check=True)
+        return json.loads(out.stdout)
 
 
 def local_non_loopback_ip():
