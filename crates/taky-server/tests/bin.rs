@@ -374,6 +374,28 @@ fn already_running_and_stale_socket_takeover() {
     assert!(!s.sock().exists());
 }
 
+/// review-3C N-2: a stale mgmt path that cannot be removed (here a non-empty directory: no ping
+/// answer, `os.remove` fails) is a startup error, exit 1, as Python; nothing is bound.
+#[test]
+fn unremovable_stale_socket_fails_startup() {
+    let s = site("");
+    std::fs::create_dir(s.sock()).unwrap();
+    std::fs::write(s.sock().join("keep"), b"x").unwrap();
+    let out = run(&["-c", "taky.conf"], &s.root);
+    let err = stderr(&out);
+    assert_eq!(out.status.code(), Some(1), "{err}");
+    let want = format!(
+        "ERROR:root:Unable to start COTServer: Is a directory (os error 21) ({})",
+        s.sock().display()
+    );
+    assert!(err.contains(&want), "{err}");
+    assert!(s.sock().join("keep").exists(), "the stale path was touched");
+    assert!(
+        TcpListener::bind((HOST, s.port)).is_ok(),
+        "CoT port was bound"
+    );
+}
+
 #[test]
 fn startup_errors_exit_1_and_remove_the_socket() {
     // N-5: PersistError (invalid redis URL) after the sockets are bound.

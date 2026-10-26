@@ -54,14 +54,15 @@ impl Listeners {
     ///
     /// Mgmt: an existing socket file that answers a ping ⇒ error `Taky already appears to be
     /// running via <path>`; a stale one (no answer, any socket error, or not a socket) is
-    /// removed and taken over. A mgmt bind error is logged (ERROR) and not fatal (`mgmt: None`).
+    /// removed and taken over; if it cannot be removed, that error is returned (startup fails,
+    /// as Python's `os.remove` exception, review-3C N-2). A mgmt bind error is logged (ERROR) and not fatal (`mgmt: None`).
     /// CoT/monitor: `SO_REUSEADDR`, backlog 128; `bind_ip`/`mon_ip` unset ⇒ all IPv4 addresses,
     /// otherwise the first `getaddrinfo` result (several ⇒ WARNING); a resolve error ⇒
     /// `Unable to determine address info for bind_ip: <ip>`. If a later bind fails, the mgmt
     /// socket file created here is removed again.
     pub async fn bind(cfg: &TakyConfig) -> std::io::Result<Listeners> {
         let mgmt_path = cfg.taky.root_dir.join(MGMT_SOCK_NAME);
-        if !check_socket(&mgmt_path).await {
+        if !check_socket(&mgmt_path).await? {
             return Err(std::io::Error::other(format!(
                 "Taky already appears to be running via {}",
                 mgmt_path.display()
@@ -111,25 +112,19 @@ impl Drop for MgmtFileGuard {
     }
 }
 
-/// `check_socket` (`server.py:39-48`): `true` if the path is free (possibly after removing a
-/// stale file), `false` if a running server answered the ping.
-async fn check_socket(path: &Path) -> bool {
+/// `check_socket` (`server.py:39-48`): `Ok(true)` if the path is free (possibly after removing
+/// a stale file), `Ok(false)` if a running server answered the ping, `Err` if the stale file
+/// cannot be removed (`os.remove` raises ⇒ `Unable to start COTServer`, exit 1).
+async fn check_socket(path: &Path) -> std::io::Result<bool> {
     if std::fs::symlink_metadata(path).is_err() {
-        return true;
+        return Ok(true);
     }
     if ping_socket(path).await {
-        return false;
+        return Ok(false);
     }
-    if let Err(e) = std::fs::remove_file(path) {
-        // Python's os.remove would raise here; the bind below then reports the problem.
-        pylog!(
-            LGR,
-            Level::DEBUG,
-            "Unable to remove stale management socket {}: {e}",
-            path.display()
-        );
-    }
-    true
+    std::fs::remove_file(path)
+        .map_err(|e| std::io::Error::new(e.kind(), format!("{e} ({})", path.display())))?;
+    Ok(true)
 }
 
 /// `ping_socket` (`server.py:51-64`): connect, send `{"cmd": "ping"}\0`, wait ≤ 1 s for any
@@ -274,7 +269,16 @@ async fn start_inner(opts: ServerOptions, listeners: Listeners) -> anyhow::Resul
         let db = CertDb::open(&cfg.ssl.cert_db)?;
         (Some(TlsAcceptor::from(sc)), Some(db))
     } else {
-        (None, None)
+        // server.py:84 builds CertificateDatabase() in plain mode too: kickban revokes there
+        // (review-3C N-1). Ban-on-connect needs a peer serial, so it stays TLS-only.
+        let db = match CertDb::open(&cfg.ssl.cert_db) {
+            Ok(db) => Some(db),
+            Err(e) => {
+                pylog!(LGR, Level::WARN, "Unable to open cert-db: {e}");
+                None
+            }
+        };
+        (None, db)
     };
 
     let persist = Persistence::from_config(cfg, opts.clock.clone()).await?;

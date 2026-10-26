@@ -6,7 +6,9 @@
 //! * `Connected` — ban check first (TLS peer with a serial: cert-db re-read if the file changed,
 //!   D-11; status `R` ⇒ [`ConnectVerdict::Banned`], not registered, no persist), otherwise
 //!   `Router::client_connect` + `send_persist`, then [`ConnectVerdict::Accepted`]. Plain-TCP and
-//!   certificate-less clients skip the check (cert-db is a blacklist).
+//!   certificate-less clients skip the check (cert-db is a blacklist). The cert-db is also
+//!   opened in plain mode (Python always builds `CertificateDatabase()`, server.py:84) so that
+//!   mgmt `kickban` revokes there (review-3C N-1); ban-on-connect stays TLS-only.
 //! * `Event` — `Router::on_event` with the **unmodified** event (max_ttl is the Router's step 5;
 //!   the monitor copy keeps the original stale). Events from an id the Router no longer knows
 //!   (e.g. removed as a slow client) are dropped by the Router.
@@ -16,10 +18,11 @@
 //! * Shutdown: every registered client is closed with `"Server shutting down"`, then the actor
 //!   returns.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
-use chrono::{Local, TimeZone};
+use chrono::{Local, NaiveDateTime, TimeZone};
 use serde_json::{Map, Value, json};
 use taky_common::{SharedClock, Shutdown, pylog};
 use taky_cot::{ClientHandle, ClientId, Event, Outbox, Router};
@@ -136,6 +139,10 @@ impl HubHandle {
 pub struct Hub {
     router: Router,
     cert_db: Option<CertDb>,
+    /// Set when a kickban job was lost (JoinError) and the cert-db could not be re-opened:
+    /// the next TLS connect retries the open and is refused while it fails (fail-closed,
+    /// review-3C N-4).
+    cert_db_lost: Option<PathBuf>,
     clock: SharedClock,
     /// Start time, epoch seconds (`COTServer.started`; mgmt `uptime`).
     started: f64,
@@ -143,13 +150,15 @@ pub struct Hub {
 }
 
 impl Hub {
-    /// New Hub with a queue of [`crate::limits::HUB_QUEUE`]. `cert_db` is `None` without SSL.
+    /// New Hub with a queue of [`crate::limits::HUB_QUEUE`]. `cert_db` is `None` if the
+    /// cert-db could not be opened (plain mode) or in tests.
     pub fn new(router: Router, cert_db: Option<CertDb>, clock: SharedClock) -> (Hub, HubHandle) {
         let (tx, rx) = mpsc::channel(crate::limits::HUB_QUEUE);
         (
             Hub {
                 router,
                 cert_db,
+                cert_db_lost: None,
                 started: clock.epoch(),
                 clock,
                 rx,
@@ -224,6 +233,26 @@ impl Hub {
 
     /// `client_connect` (server.py:243-255) + `router.client_connect`.
     async fn connect(&mut self, handle: ClientHandle) -> ConnectVerdict {
+        if let (Some(_), None, Some(path)) = (
+            handle.peer_serial.as_ref(),
+            self.cert_db.as_ref(),
+            self.cert_db_lost.clone(),
+        ) {
+            match CertDb::open(&path) {
+                Ok(db) => {
+                    self.cert_db = Some(db);
+                    self.cert_db_lost = None;
+                }
+                Err(e) => {
+                    pylog!(
+                        LGR,
+                        Level::ERROR,
+                        "Unable to re-open cert-db, refusing client: {e}"
+                    );
+                    return ConnectVerdict::Banned;
+                }
+            }
+        }
         if let (Some(serial), Some(db)) = (handle.peer_serial.as_deref(), self.cert_db.as_mut()) {
             pylog!(
                 LGR,
@@ -320,31 +349,33 @@ impl Hub {
         let name = user.to_owned();
         let job = tokio::task::spawn_blocking(move || {
             let mut db = db;
-            let refresh_err = db.refresh();
-            let serials: Vec<Vec<u8>> = db
-                .by_name(&name)
-                .filter(|r| r.status != CertStatus::Revoked)
-                .map(|r| r.serial.clone())
-                .collect();
-            let results: Vec<(Vec<u8>, Result<(), PkiError>)> = serials
-                .into_iter()
-                .map(|sn| {
-                    let r = db.revoke(&sn, when);
-                    (sn, r)
-                })
-                .collect();
-            (db, refresh_err, results)
+            // A panic must not lose the db (bans would fail open, review-3C N-4).
+            let out = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                kickban_blocking(&mut db, &name, when)
+            }));
+            (db, out)
         })
         .await;
-        let (db, refresh_err, results) = match job {
+        let (db, out) = match job {
             Ok(x) => x,
             Err(e) => {
+                // Only a cancelled task (runtime shutting down) gets here: the db is gone.
                 pylog!(LGR, Level::ERROR, "kickban failed: {e}");
-                self.cert_db = CertDb::open(&path).ok();
+                match CertDb::open(&path) {
+                    Ok(db) => self.cert_db = Some(db),
+                    Err(e) => {
+                        pylog!(LGR, Level::ERROR, "Unable to re-open cert-db: {e}");
+                        self.cert_db_lost = Some(path);
+                    }
+                }
                 return json!({ "revoked_sns": revoked });
             }
         };
         self.cert_db = Some(db);
+        let Ok((refresh_err, results)) = out else {
+            pylog!(LGR, Level::ERROR, "kickban failed: task panicked");
+            return json!({ "revoked_sns": revoked });
+        };
         if let Some(e) = refresh_err {
             pylog!(LGR, Level::WARN, "Unable to re-read cert-db: {e}");
         }
@@ -383,6 +414,34 @@ impl Hub {
         }
         json!({ "revoked_sns": revoked })
     }
+}
+
+/// Result of [`kickban_blocking`]: the refresh error and each revoke attempt.
+type KickbanResult = (Option<PkiError>, Vec<(Vec<u8>, Result<(), PkiError>)>);
+
+#[cfg(test)]
+static KICKBAN_PANIC: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The blocking part of `kickban`: re-read the cert-db if changed, revoke `name`'s live records.
+fn kickban_blocking(db: &mut CertDb, name: &str, when: NaiveDateTime) -> KickbanResult {
+    let refresh_err = db.refresh();
+    #[cfg(test)]
+    if KICKBAN_PANIC.swap(false, Ordering::SeqCst) {
+        panic!("injected kickban panic");
+    }
+    let serials: Vec<Vec<u8>> = db
+        .by_name(name)
+        .filter(|r| r.status != CertStatus::Revoked)
+        .map(|r| r.serial.clone())
+        .collect();
+    let results = serials
+        .into_iter()
+        .map(|sn| {
+            let r = db.revoke(&sn, when);
+            (sn, r)
+        })
+        .collect();
+    (refresh_err, results)
 }
 
 /// A float as Python prints it (`5.0`, not `5`).
@@ -439,6 +498,69 @@ fn hex_upper(b: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::conn::ConnOutbox;
+    use taky_common::clock::FakeClock;
+    use taky_cot::{ClientKind, ClientStats, Persistence};
+
+    async fn connect_serial(hub: &mut Hub, id: u64, serial: Vec<u8>) -> ConnectVerdict {
+        let (ob, _rx) = ConnOutbox::new();
+        hub.connect(ClientHandle {
+            id: ClientId(id),
+            kind: ClientKind::Cot,
+            outbox: ob,
+            stats: Arc::new(ClientStats::new(0.0)),
+            addr: None,
+            peer_serial: Some(serial),
+        })
+        .await
+    }
+
+    /// review-3C N-4: a kickban job that panics keeps the cert-db (bans stay enforced), even
+    /// when the file can no longer be opened; a lost db makes TLS connects fail closed.
+    #[tokio::test]
+    async fn kickban_panic_keeps_cert_db() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cert-db.txt");
+        std::fs::write(
+            &path,
+            "R\t2026-01-01T00:00:00\t2027-01-01T00:00:00\t0a\talice\n\
+             V\t2026-01-01T00:00:00\t2027-01-01T00:00:00\t0b\tbob\n",
+        )
+        .unwrap();
+        let clock =
+            FakeClock::new(taky_cot::isoparse::isoparse("2030-01-01T00:00:00Z").unwrap()).shared();
+        let router = Router::new(-1, Persistence::memory(clock.clone()), clock.clone());
+        let mut hub = Hub::new(router, Some(CertDb::open(&path).unwrap()), clock).0;
+        // The file becomes unreadable (a directory): a re-open would fail.
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+
+        KICKBAN_PANIC.store(true, Ordering::SeqCst);
+        assert_eq!(hub.kickban(Some("bob")).await, json!({"revoked_sns": []}));
+        assert!(hub.cert_db.is_some());
+        assert_eq!(
+            connect_serial(&mut hub, 1, vec![0x0a]).await,
+            ConnectVerdict::Banned
+        );
+        assert_eq!(
+            connect_serial(&mut hub, 2, vec![0x0b]).await,
+            ConnectVerdict::Accepted
+        );
+
+        // Lost db (cancelled job, re-open failed): refused until the open succeeds.
+        hub.cert_db = None;
+        hub.cert_db_lost = Some(path.clone());
+        assert_eq!(
+            connect_serial(&mut hub, 3, vec![0x0b]).await,
+            ConnectVerdict::Banned
+        );
+        std::fs::remove_dir(&path).unwrap();
+        assert_eq!(
+            connect_serial(&mut hub, 4, vec![0x0b]).await,
+            ConnectVerdict::Accepted
+        );
+        assert!(hub.cert_db.is_some() && hub.cert_db_lost.is_none());
+    }
 
     #[test]
     fn big_int_and_hex() {

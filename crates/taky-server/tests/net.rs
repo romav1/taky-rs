@@ -1036,3 +1036,50 @@ async fn mgmt_framing_and_errors() {
     srv.run.join().await.unwrap();
     assert!(!srv.mgmt.exists());
 }
+
+/// review-3C N-1: without SSL the cert-db is still opened (server.py:84), so kickban revokes
+/// there and returns the serials; a plain client is still accepted (ban-on-connect is TLS-only).
+/// An unopenable cert-db in plain mode is a WARNING, not a startup error.
+#[tokio::test]
+async fn plain_kickban_revokes_in_cert_db() {
+    let p = pki(&["bob"], &[]);
+    let srv = serve(config(&p, false, &Value::Null), now()).await;
+    let mut m = Mgmt::connect(&srv.mgmt).await;
+    assert_eq!(
+        m.request(br#"{"cmd": "kickban", "user": "bob"}"#).await,
+        format!(r#"{{"revoked_sns": [{}]}}"#, p.serial_int("bob"))
+    );
+    let rec = CertDb::open(&p.cert_db).unwrap();
+    let bob: Vec<_> = rec.by_name("bob").collect();
+    assert_eq!(bob.len(), 1);
+    assert_eq!(bob[0].status, taky_pki::CertStatus::Revoked);
+    let line = std::fs::read_to_string(&p.cert_db).unwrap();
+    assert!(
+        line.lines()
+            .any(|l| l.starts_with("R\t") && l.ends_with("\tbob")),
+        "{line}"
+    );
+    assert_eq!(
+        m.request(br#"{"cmd": "kickban", "user": "bob"}"#).await,
+        r#"{"revoked_sns": []}"#
+    );
+    let c = Client::connect(srv.run.local_addr, None).await;
+    srv.run.hub.settle().await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(!c.eof());
+    srv.shutdown.trigger();
+    srv.run.join().await.unwrap();
+
+    // cert-db that cannot be read: the plain server still starts, kickban revokes nothing.
+    let p = pki(&[], &[]);
+    std::fs::remove_file(&p.cert_db).unwrap();
+    std::fs::create_dir(&p.cert_db).unwrap();
+    let srv = serve(config(&p, false, &Value::Null), now()).await;
+    let mut m = Mgmt::connect(&srv.mgmt).await;
+    assert_eq!(
+        m.request(br#"{"cmd": "kickban", "user": "bob"}"#).await,
+        r#"{"revoked_sns": []}"#
+    );
+    srv.shutdown.trigger();
+    srv.run.join().await.unwrap();
+}
