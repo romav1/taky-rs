@@ -341,7 +341,12 @@ impl Hub {
     /// `spawn_blocking`. A revoke that fails to write is logged (ERROR) and not reported.
     async fn kickban(&mut self, user: Option<&str>) -> Value {
         let mut revoked: Vec<Value> = Vec::new();
-        let (Some(user), Some(db)) = (user, self.cert_db.take()) else {
+        // Check `user` before taking the db: a user-less request must not lose it (BUG-1, bans
+        // would fail open). Python: `get_certificates_by_name(None / non-str)` matches nothing.
+        let Some(user) = user else {
+            return json!({ "revoked_sns": revoked });
+        };
+        let Some(db) = self.cert_db.take() else {
             return json!({ "revoked_sns": revoked });
         };
         let path = db.path().to_owned();
@@ -616,6 +621,41 @@ mod tests {
             ConnectVerdict::Accepted
         );
         assert!(hub.cert_db.is_some() && hub.cert_db_lost.is_none());
+    }
+
+    /// BUG-1 (S-403a): a kickban without a (string) user keeps the cert-db: a revoked peer is
+    /// still refused and a later kickban with a user still revokes.
+    #[tokio::test]
+    async fn kickban_without_user_keeps_cert_db() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cert-db.txt");
+        std::fs::write(
+            &path,
+            "R\t2026-01-01T00:00:00\t2027-01-01T00:00:00\t0a\tcarol\n\
+             V\t2026-01-01T00:00:00\t2027-01-01T00:00:00\t0b\tbob\n",
+        )
+        .unwrap();
+        let clock =
+            FakeClock::new(taky_cot::isoparse::isoparse("2030-01-01T00:00:00Z").unwrap()).shared();
+        let router = Router::new(-1, Persistence::memory(clock.clone()), clock.clone());
+        let mut hub = Hub::new(router, Some(CertDb::open(&path).unwrap()), clock).0;
+
+        assert_eq!(hub.kickban(None).await, json!({"revoked_sns": []}));
+        assert!(hub.cert_db.is_some() && hub.cert_db_lost.is_none());
+        assert_eq!(
+            connect_serial(&mut hub, 1, vec![0x0a]).await,
+            ConnectVerdict::Banned
+        );
+        assert_eq!(hub.kickban(Some("bob")).await, json!({"revoked_sns": [11]}));
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.lines()
+                .any(|l| l.starts_with("R\t") && l.ends_with("\tbob"))
+        );
+        assert_eq!(
+            connect_serial(&mut hub, 2, vec![0x0b]).await,
+            ConnectVerdict::Banned
+        );
     }
 
     /// review-3E N-1: under a held `<cert_db>.lock` kickban gives up after the first lock

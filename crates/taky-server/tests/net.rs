@@ -1037,6 +1037,45 @@ async fn mgmt_framing_and_errors() {
     assert!(!srv.mgmt.exists());
 }
 
+/// BUG-1 (S-403a): kickban with a missing / null / non-string `user` answers `[]` (Python:
+/// `get_certificates_by_name` matches nothing) and keeps the cert-db: a revoked (`R`) client is
+/// still refused over TLS and a later kickban with a user still revokes and kicks.
+#[tokio::test]
+async fn kickban_without_user_keeps_bans() {
+    let p = pki(&["bob", "carol"], &["carol"]);
+    let srv = serve(config(&p, true, &Value::Null), now()).await;
+    let bob = Client::connect(srv.run.local_addr, Some(client_tls(&p, Some("bob")))).await;
+    let mut m = Mgmt::connect(&srv.mgmt).await;
+    for req in [
+        &br#"{"cmd": "kickban"}"#[..],
+        br#"{"cmd": "kickban", "user": null}"#,
+        br#"{"cmd": "kickban", "user": 5}"#,
+        br#"{"cmd": "kickban", "user": ["bob"]}"#,
+        br#"{"cmd": "kickban", "user": {"name": "bob"}}"#,
+    ] {
+        assert_eq!(m.request(req).await, r#"{"revoked_sns": []}"#);
+    }
+    let carol = Client::connect(srv.run.local_addr, Some(client_tls(&p, Some("carol")))).await;
+    assert!(
+        wait_eof(&carol).await,
+        "revoked carol must still be refused"
+    );
+    srv.run.hub.settle().await;
+    assert!(!bob.eof());
+    assert_eq!(
+        m.request(br#"{"cmd": "kickban", "user": "bob"}"#).await,
+        format!(r#"{{"revoked_sns": [{}]}}"#, p.serial_int("bob"))
+    );
+    assert!(wait_eof(&bob).await, "bob is kicked");
+    let again = Client::connect(srv.run.local_addr, Some(client_tls(&p, Some("bob")))).await;
+    assert!(
+        wait_eof(&again).await,
+        "revoked bob is refused on reconnect"
+    );
+    srv.shutdown.trigger();
+    srv.run.join().await.unwrap();
+}
+
 /// review-3C N-1: without SSL the cert-db is still opened (server.py:84), so kickban revokes
 /// there and returns the serials; a plain client is still accepted (ban-on-connect is TLS-only).
 /// An unopenable cert-db in plain mode is a WARNING, not a startup error.
