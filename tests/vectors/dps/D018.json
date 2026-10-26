@@ -7,7 +7,7 @@
     "taky/taky/dps/views/datapackage.py:95",
     "qa01/work/probes/dps_hash_traversal_probe.py"
   ],
-  "notes": "D-22 (BUG, found by qa01): `hash` is substituted into meta/<hash>.json and the resolved meta['UID'] is passed to send_file without validation. Step 1: hash='../X_evil' opens meta/../X_evil.json == <upload_path>/X_evil.json, whose forged UID '../sekret.txt' makes Python serve a file OUTSIDE upload_path (here a harmless planted test file in the temp root). Step 2 leaks existence the same way via missionquery. Step 3 (control) shows a well-formed hash is unaffected. Rust validates the hash against ^[A-Za-z0-9._-]+$ (and rejects '..'); a traversing hash -> 400 'Invalid hash'. The same unvalidated `hash` on missionupload lets Python create a symlink and unlink *.json outside meta/ (see dps-cli-config.md DC BUG paragraph); Rust rejects those too.",
+  "notes": "D-22 (BUG, found by qa01): `hash` is substituted into meta/<hash>.json and the resolved meta['UID'] is passed to send_file without validation. Step 1: hash='../X_evil' opens meta/../X_evil.json == <upload_path>/X_evil.json, whose forged UID '../sekret.txt' makes Python serve a file OUTSIDE upload_path (here a harmless planted test file in the temp root). Step 2 leaks existence the same way via missionquery. Step 3 (control) shows a well-formed hash is unaffected. Rust validates the hash against ^[A-Za-z0-9._-]+$ (and rejects '..'); a traversing hash -> 400 'Invalid hash'. The same unvalidated `hash` on missionupload lets Python create a symlink and unlink *.json outside meta/ (see dps-cli-config.md DC BUG paragraph); Rust rejects those too. S-A04 steps 4-10: step 4 (parity) missionupload with a traversing hash but no creatorUid -> 400 'Invalid arguments' in both (the argument check comes first). Step 5: PUT metadata/x..y/tool -> Python 404 'Could not find file matching x..y' (no meta, nothing written), Rust 400 'Invalid hash'. Step 6 (parity): GET on the PUT-only metadata/<hash>/tool route -> 405 in both (method check precedes the hash check). Steps 7-8: an empty hash= is present (not 'Must supply hash'): Python content -> 500 (KeyError 'UID'), missionquery -> 404; Rust 400 'Invalid hash'. Steps 9-10 are Rust-only (python_skip): missionupload with a traversing / empty hash plus creatorUid and assetfile -> Rust 400 'Invalid hash', nothing written (final files unchanged); Python's observed behaviour is recorded in each step's python_skip.",
   "config": {
     "taky": {
       "hostname": "taky.example",
@@ -106,6 +106,163 @@
         "headers": {
           "Content-Disposition": "attachment; filename=pkg.zip"
         }
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "path": "/Marti/sync/missionupload",
+        "identity": {
+          "cn": "alice"
+        },
+        "query": {
+          "hash": "../../planted"
+        },
+        "multipart": [
+          {
+            "name": "assetfile",
+            "filename": "x.zip",
+            "content_type": "application/zip",
+            "data": "EVIL"
+          }
+        ]
+      },
+      "expect": {
+        "status": 400,
+        "content_type": "text/html; charset=utf-8",
+        "body": "Invalid arguments"
+      }
+    },
+    {
+      "request": {
+        "method": "PUT",
+        "path": "/Marti/api/sync/metadata/x..y/tool",
+        "identity": {
+          "cn": "alice"
+        },
+        "body": "public"
+      },
+      "rust_expect": {
+        "status": 400,
+        "content_type": "text/html; charset=utf-8",
+        "body": "Invalid hash"
+      },
+      "expect": {
+        "status": 404,
+        "content_type": "text/html; charset=utf-8",
+        "body": "Could not find file matching x..y"
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/Marti/api/sync/metadata/x..y/tool",
+        "identity": {
+          "cn": "alice"
+        }
+      },
+      "expect": {
+        "status": 405,
+        "content_type": "text/html; charset=utf-8",
+        "body_is_framework_page": true
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/Marti/sync/content",
+        "identity": {
+          "cn": "alice"
+        },
+        "query": {
+          "hash": ""
+        }
+      },
+      "rust_expect": {
+        "status": 400,
+        "content_type": "text/html; charset=utf-8",
+        "body": "Invalid hash"
+      },
+      "expect": {
+        "status": 500,
+        "content_type": "text/html; charset=utf-8",
+        "body_is_framework_page": true
+      }
+    },
+    {
+      "request": {
+        "method": "GET",
+        "path": "/Marti/sync/missionquery",
+        "identity": {
+          "cn": "alice"
+        },
+        "query": {
+          "hash": ""
+        }
+      },
+      "rust_expect": {
+        "status": 400,
+        "content_type": "text/html; charset=utf-8",
+        "body": "Invalid hash"
+      },
+      "expect": {
+        "status": 404,
+        "content_type": "text/html; charset=utf-8",
+        "body": "File not found"
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "path": "/Marti/sync/missionupload",
+        "identity": {
+          "cn": "alice"
+        },
+        "query": {
+          "hash": "../../planted",
+          "creatorUid": "U9"
+        },
+        "multipart": [
+          {
+            "name": "assetfile",
+            "filename": "x.zip",
+            "content_type": "application/zip",
+            "data": "EVIL"
+          }
+        ]
+      },
+      "python_skip": "D-22, unsafe in Python: 200 'https://taky.example:8443//Marti/sync/content?hash=../../planted', writes U9_x.zip + meta/U9_x.zip.json and the symlink <upload_path>/../planted.json OUTSIDE upload_path (an01/work/probes/dps_hash_rustonly_probe.py, temp dir)",
+      "rust_expect": {
+        "status": 400,
+        "content_type": "text/html; charset=utf-8",
+        "body": "Invalid hash"
+      }
+    },
+    {
+      "request": {
+        "method": "POST",
+        "path": "/Marti/sync/missionupload",
+        "identity": {
+          "cn": "alice"
+        },
+        "query": {
+          "hash": "",
+          "creatorUid": "U9"
+        },
+        "multipart": [
+          {
+            "name": "assetfile",
+            "filename": "x.zip",
+            "content_type": "application/zip",
+            "data": "EVIL"
+          }
+        ]
+      },
+      "python_skip": "D-22, state-changing in Python: 200 'https://taky.example:8443//Marti/sync/content?hash=', writes U9_x.zip + meta/U9_x.zip.json and the symlink meta/.json (an01/work/probes/dps_hash_rustonly_probe.py)",
+      "rust_expect": {
+        "status": 400,
+        "content_type": "text/html; charset=utf-8",
+        "body": "Invalid hash"
       }
     }
   ],

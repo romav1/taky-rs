@@ -183,6 +183,7 @@ Additive over format 1: a consumer that ignores the new fields still runs the Py
 |---|---|
 | `steps[i].rust_expect` (cot, dps), `cases[i].rust_expect` (unit) | Replaces `expect` of this step/case **entirely** for Rust runners (same schema). Absent ⇒ Rust uses `expect`. |
 | Rust-only steps | Steps after a step whose `expect.server_crash` is true are not executed by the Python runner and have no `expect`, only `rust_expect` (V013 step 3, V051 step 2: the Rust server is still alive). |
+| `steps[i].python_skip` (dps) | Builder (by hand): reason string. A Rust-only step that is unsafe or state-changing in Python (D018 steps 9–10: Python would symlink outside `upload_path`); the reason records the observed Python behaviour. `run_python_dps.py` never executes it (with or without `--generate`); it has only `rust_expect`. Lint: no `expect`, and every later step is also `python_skip` (difftest `py` stops at the first step without `expect`). |
 
 Rust runner rule: `exp = step.rust_expect ?? step.expect`, `final = vec.final_rust_expect ?? vec.final_expect`.
 The Python runners never execute `rust_expect`; they lint it (`vecfmt.py`: `format == 2`; `rust_expect` ⇔ `expected-divergence`;
@@ -200,7 +201,7 @@ with the D-n fixes monkey-patched in (`an01/work/probes/rust_expect_probe.py`, 4
 5. **DPS identity** ⇒ a real client certificate over TLS; with `ssl.enabled=false` the Rust runner sends the headers as is (until G-6).
 6. XML and Redis values: `exact` is normative (arch01, compat-matrix §4); `c14n` is diagnostics only.
 
-### Vectors with rust_expect (S-205 + S-206 + S-A01 + S-A02)
+### Vectors with rust_expect (S-205 + S-206 + S-A01 + S-A02 + S-A04)
 | Vector | Where | D-n | Rust behavior |
 |---|---|---|---|
 | V012 | `final_rust_expect` | D-8 | version-less event is not persisted (`uids: ["M-1"]`) |
@@ -214,7 +215,7 @@ with the D-n fixes monkey-patched in (`an01/work/probes/rust_expect_probe.py`, 4
 | V053 | `final_rust_expect` | D-12 | a traversing uid is sanitised (`../escape` → `.._escape`), the log stays inside `log_cot` |
 | D003 | step 2 | D-21 | plain-mode `X-USER` from a non-loopback peer → 401 (Python trusts it → 200) |
 | D016 | step 1, `final_rust_expect` | D-1 | a vcm DOCTYPE → 400 `Malformed XML`, nothing written (XXE surface removed) |
-| D018 | steps 1, 2 | D-22 | a traversing `hash` → 400 `Invalid hash` (Python serves a file outside `upload_path`) |
+| D018 | steps 1, 2, 5, 7, 8, 9–10 (Rust-only, `python_skip`) | D-22 | a traversing / bad / empty `hash` → 400 `Invalid hash` on content, missionquery, `metadata/<hash>/tool` (PUT) and missionupload (after the `Invalid arguments` check; step 4 parity); GET on the tool route stays 405 (step 6 parity) |
 | V054 | steps 2, 4, `final_rust_expect` | D-23 | after `&foo;` only the enclosing event is dropped: M-2 (same chunk) and M-4 are routed, no disconnect |
 | V045 | step 6 | D-24 | invalid JSON → same `{"error": …}` shape, text = serde_json 1.0.154 `Display`: `key must be a string at line 1 column 2` |
 | V055 | steps 2, 3 | D-23 | bare `&` / `&#65` in text → disconnect "XML Syntax Error" (Python: zombie connection, nothing parsed any more) |
