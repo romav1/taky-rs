@@ -81,6 +81,11 @@ proptest = "1"
 assert_cmd = "2"
 libtest-mimic = "0.8"
 
+# Debug/test builds only: RSA-2048 keygen (rsa → num-bigint-dig) takes ~5–7 s per key unoptimised
+# (dev02 S-320). Optimising just this crate keeps `cargo test` fast; release is unaffected (review-3E).
+[profile.dev.package.num-bigint-dig]
+opt-level = 3
+
 [profile.release]
 # ADR-007
 opt-level = 3
