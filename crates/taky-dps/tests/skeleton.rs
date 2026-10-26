@@ -197,3 +197,41 @@ async fn stalled_upload_body_times_out() {
     assert!(!h.upload_path.join("u1_a.zip").exists());
     h.stop().await;
 }
+
+/// D-27 (S-A06 Q1): SSL on and `key =` (empty) ⇒ the DPS fails at startup (Python/gunicorn starts
+/// and fails every TLS connection); a valueless `key` still reads the key from the cert file.
+#[test]
+fn d27_empty_ssl_key_fails_startup() {
+    let pki = common::Pki::new();
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    std::fs::write(root.join("ca.crt"), &pki.ca_pem).unwrap();
+    std::fs::write(
+        root.join("both.pem"),
+        format!("{}{}", pki.server_pem, pki.server_key_pem),
+    )
+    .unwrap();
+    let app = |key_line: &str| {
+        let conf = root.join("taky.conf");
+        std::fs::write(
+            &conf,
+            format!(
+                "[ssl]\nenabled = true\nca = ca.crt\ncert = both.pem\n{key_line}\ncert_db = cert-db.txt\n\
+                 [dp_server]\nupload_path = .\n"
+            ),
+        )
+        .unwrap();
+        let cfg = taky_config::load_config_in(Some(&conf), true, root).unwrap();
+        taky_dps::DpsApp::new(&taky_dps::DpsOptions {
+            cfg: std::sync::Arc::new(cfg),
+            clock: taky_common::SystemClock::shared(),
+            shutdown: taky_common::Shutdown::new(),
+        })
+    };
+    let err = app("key =").expect_err("empty ssl.key must fail");
+    assert!(
+        format!("{err:#}").contains("No such file or directory"),
+        "{err:#}"
+    );
+    assert!(app("key").expect("key from cert file").is_tls());
+}

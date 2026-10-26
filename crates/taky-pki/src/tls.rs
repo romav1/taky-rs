@@ -29,7 +29,8 @@ pub fn provider() -> Arc<CryptoProvider> {
 /// Build the server config: CAs from `ssl.ca` (or system roots), chain `ssl.cert`, key `ssl.key`
 /// (PKCS#1/#8/SEC1, encrypted with `ssl.key_pw`), TLS 1.2 + 1.3, `ring` provider.
 ///
-/// `ssl.key` unset ⇒ the key is read from the `ssl.cert` file (Python `load_cert_chain(keyfile=None)`).
+/// `ssl.key` unset ⇒ the key is read from the `ssl.cert` file (Python `load_cert_chain(keyfile=None)`);
+/// an empty `ssl.key` is a path like any other and fails to load (`keyfile=""`, S-A06 Q1).
 /// With an empty trust store (no `ssl.ca`, no usable system roots) a mandatory-cert config is an
 /// error; an optional-cert config then does not request client certificates at all (Python would
 /// request one but fail any presented certificate — the no-cert path is the same).
@@ -39,11 +40,7 @@ pub fn server_config(ssl: &SslSect, mode: TlsMode) -> Result<Arc<rustls::ServerC
         .as_deref()
         .filter(|p| !p.as_os_str().is_empty())
         .ok_or_else(|| PkiError::Invalid("ssl.cert is not set".into()))?;
-    let key_path = ssl
-        .key
-        .as_deref()
-        .filter(|p| !p.as_os_str().is_empty())
-        .unwrap_or(cert_path);
+    let key_path = ssl.key.as_deref().unwrap_or(cert_path);
     let chain = load_certs(cert_path)?;
     let key = load_private_key(key_path, ssl.key_pw.as_deref())?;
 

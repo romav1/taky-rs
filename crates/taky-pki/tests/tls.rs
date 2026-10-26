@@ -4,6 +4,7 @@
 
 mod common;
 
+use std::path::PathBuf;
 use std::process::Command;
 
 use common::*;
@@ -270,6 +271,28 @@ fn openssl_encrypted_keys_interop() {
             && msg.contains("openssl pkcs8 -topk8 -v2 aes-256-cbc"),
         "{msg}"
     );
+}
+
+/// S-A06 Q1: an empty `ssl.key` is opened as a path (fails), not replaced by `ssl.cert` —
+/// even when the cert file holds the key; `None` still reads the key from the cert file.
+#[test]
+fn empty_key_path_is_an_error() {
+    let p = pki();
+    let d = tempfile::tempdir().expect("tmp");
+    let both = format!("{}{}", cert_pem(&p.server_cert), p.server_rsa.pkcs1_pem());
+    let mut s = ssl(p, true);
+    s.cert = Some(write(d.path(), "both.pem", both));
+    s.key = Some(PathBuf::new());
+    match server_config(&s, TlsMode::Cot) {
+        Err(PkiError::Io { path, source }) => {
+            assert_eq!(path, PathBuf::new());
+            assert_eq!(source.kind(), std::io::ErrorKind::NotFound);
+        }
+        other => panic!("expected Io error, got {other:?}"),
+    }
+    assert!(server_config(&s, TlsMode::Dps).is_err());
+    s.key = None;
+    server_config(&s, TlsMode::Cot).expect("key from cert file");
 }
 
 #[test]

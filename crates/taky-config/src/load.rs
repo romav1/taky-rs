@@ -74,7 +74,9 @@ pub struct SslSect {
     pub server_p12_pw: Option<String>,
     /// `cert`.
     pub cert: Option<PathBuf>,
-    /// `key`.
+    /// `key`. `None` only for a valueless `key` line (the key is then read from `cert`); `key =`
+    /// (empty) stays `Some("")` and must fail to load, as Python's `load_cert_chain(keyfile="")`
+    /// (S-A06 Q1; DPS: D-27).
     pub key: Option<PathBuf>,
     /// `key_pw`.
     pub key_pw: Option<String>,
@@ -324,7 +326,8 @@ fn build(
         server_p12: path("ssl", "server_p12")?,
         server_p12_pw: get("ssl", "server_p12_pw")?,
         cert: path("ssl", "cert")?,
-        key: path("ssl", "key")?,
+        // Not `path()`: "" is not "unset" here (S-A06 Q1).
+        key: get("ssl", "key")?.map(PathBuf::from),
         key_pw: get("ssl", "key_pw")?,
         cert_db: path("ssl", "cert_db")?.unwrap_or_default(),
     };

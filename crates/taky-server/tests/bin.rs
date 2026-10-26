@@ -451,6 +451,41 @@ fn startup_errors_exit_1_and_remove_the_socket() {
     ));
 }
 
+/// S-A06 Q1: SSL on, `key =` (empty), key inside the `cert` file ⇒ Python `load_cert_chain(keyfile="")`
+/// fails (`FileNotFoundError`): two ERROR lines, exit 1, mgmt socket removed. A valueless `key`
+/// line still reads the key from the cert file.
+#[test]
+fn empty_ssl_key_fails_startup() {
+    let s = site("");
+    let both = std::fs::read_to_string(s.root.join("ssl/server.crt")).unwrap()
+        + &std::fs::read_to_string(s.root.join("ssl/server.key")).unwrap();
+    std::fs::write(s.root.join("ssl/both.pem"), both).unwrap();
+    let conf = std::fs::read_to_string(s.conf())
+        .unwrap()
+        .replace("cert = ./ssl/server.crt", "cert = ./ssl/both.pem");
+    std::fs::write(s.conf(), conf.replace("key = ./ssl/server.key", "key =")).unwrap();
+    let out = run(&["-c", "taky.conf"], &s.root);
+    let err = stderr(&out);
+    assert_eq!(out.status.code(), Some(1), "{err}");
+    let load = err
+        .find("ERROR:COTServer:Unable to load SSL certificate: ")
+        .expect(&err);
+    let start = err
+        .find("ERROR:root:Unable to start COTServer: ")
+        .expect(&err);
+    assert!(load < start, "{err}");
+    assert!(err.contains("No such file or directory"), "{err}");
+    assert!(!s.sock().exists(), "mgmt socket left after a failed start");
+
+    // Valueless `key`: the key comes from the cert file, the server starts.
+    std::fs::write(s.conf(), conf.replace("key = ./ssl/server.key", "key")).unwrap();
+    let mut child = spawn(&["-c", "taky.conf"], &s.root);
+    wait_ready(&s, &mut child);
+    signal(&child, "-TERM");
+    let out = wait_exit(child);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+}
+
 #[test]
 fn config_errors_and_cli() {
     let dir = tempfile::tempdir().unwrap();

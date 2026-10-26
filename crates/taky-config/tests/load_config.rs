@@ -151,6 +151,25 @@ fn ssl_enabled_typed_view() {
     assert_eq!(cfg.ssl.server_p12_pw.as_deref(), Some("atakatak"));
 }
 
+/// S-A06 Q1: `key =` (empty) is not "unset" — it stays `Some("")` so that loading fails as
+/// Python's `load_cert_chain(keyfile="")`; only a valueless `key` line reads the key from `cert`.
+#[test]
+fn ssl_key_empty_is_not_unset() {
+    let (_t, cwd) = cwd();
+    let key = |line: &str| {
+        std::fs::write(
+            cwd.join("taky.conf"),
+            format!("[ssl]\nenabled = true\n{line}"),
+        )
+        .unwrap();
+        load_config_in(None, false, &cwd).unwrap().ssl.key
+    };
+    assert_eq!(key("key =\n"), Some(PathBuf::new()));
+    assert_eq!(key("key\n"), None);
+    assert_eq!(key("key = k.pem\n"), Some(cwd.join("k.pem")));
+    assert_eq!(key(""), Some(PathBuf::from("/etc/taky/ssl/server.key")));
+}
+
 #[test]
 fn redis_settings() {
     let (_t, cwd) = cwd();
