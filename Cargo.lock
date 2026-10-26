@@ -2533,6 +2533,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "taky-testkit"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde_json",
+ "taky-common",
+ "taky-config",
+ "taky-server",
+ "tokio",
+]
+
+[[package]]
 name = "taky-xml"
 version = "0.1.0"
 dependencies = [

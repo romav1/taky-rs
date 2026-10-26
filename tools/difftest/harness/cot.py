@@ -67,7 +67,8 @@ class CotRun:
                     rds.expire(key, val["ttl"])
             self.rds = rds
         self.clients = {cid: Client(cid, s) for cid, s in self.vec.get("clients", {}).items()}
-        self.inst = self.t.cot(self.workdir)
+        self.inst = self.t.cot(self.workdir, self.vec)
+        self.inst.redis_on = self.redis_on
         self.inst.start(self.conf, self.vec)
 
     # ------------------------------------------------------------ io

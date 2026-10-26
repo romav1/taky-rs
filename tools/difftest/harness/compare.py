@@ -30,6 +30,35 @@ def rust_view(vec):
     return v
 
 
+def _is_memory_persist(p):
+    return isinstance(p, dict) and p.get("backend") == "memory"
+
+
+def strip_memory_persist(vec):
+    """Vector view for a target without the memory persist hook (plain taky-rs binary):
+    memory `persist` expectations are removed (reported as skipped checks)."""
+    v = copy.deepcopy(vec)
+    for s in v.get("steps", []):
+        for k in ("expect", "rust_expect"):
+            if _is_memory_persist((s.get(k) or {}).get("persist")):
+                del s[k]["persist"]
+    for k in ("final_expect", "final_rust_expect"):
+        if _is_memory_persist(v.get(k, {}).get("persist")):
+            del v[k]["persist"]
+    return v
+
+
+def strip_memory_persist_obs(obs):
+    """Drop memory persist observations (the other side has none) for the differential check."""
+    o = copy.deepcopy(obs)
+    for s in o.get("steps", []):
+        if s.get("persist") is None or _is_memory_persist(s.get("persist")):
+            s.pop("persist", None)
+    if o.get("final", {}).get("persist") is None or _is_memory_persist(o["final"].get("persist")):
+        o.get("final", {}).pop("persist", None)
+    return o
+
+
 def expect_fn(target_name):
     if target_name == "py":
         return lambda step: step.get("expect")
@@ -111,7 +140,12 @@ def _persist_close(a, b):
 def diff_cot(vec, a, b, skip_divergent):
     out = []
     steps = vec["steps"]
-    if len(a["steps"]) != len(b["steps"]):
+    n_a, n_b = len(a["steps"]), len(b["steps"])
+    # py-vs-rs: Python stops at a crash step / before a Rust-only step (format 2); the extra Rust
+    # steps all carry rust_expect and are covered by the rs oracle, so a longer rs run is expected.
+    extra_rust_only = (skip_divergent and n_b > n_a
+                       and all("rust_expect" in st for st in steps[max(n_a - 1, 0):n_b]))
+    if n_a != n_b and not extra_rust_only:
         out.append({"where": "steps", "class": "behaviour",
                     "a": f"{len(a['steps'])} steps executed", "b": f"{len(b['steps'])} steps executed"})
     for idx, (sa, sb) in enumerate(zip(a["steps"], b["steps"])):
@@ -145,7 +179,10 @@ def diff_plain(vec, a, b, skip_divergent, items_key):
     out = []
     items = vec.get(items_key, [])
     la, lb = (a["steps"], b["steps"]) if items_key == "steps" else (a, b)
-    if len(la) != len(lb):
+    # py-vs-rs: Rust-only trailing steps (DPS `python_skip`, all with rust_expect) are not run on Python
+    extra_rust_only = (skip_divergent and len(lb) > len(la)
+                       and all("rust_expect" in it for it in items[len(la):len(lb)]))
+    if len(la) != len(lb) and not extra_rust_only:
         out.append({"where": items_key, "class": "behaviour", "a": len(la), "b": len(lb)})
     for idx, (oa, ob) in enumerate(zip(la, lb)):
         if skip_divergent and "rust_expect" in items[idx]:

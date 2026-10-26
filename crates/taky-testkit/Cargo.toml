@@ -1,0 +1,30 @@
+[package]
+name = "taky-testkit"
+description = "taky-rs test-only harness binaries (qa01): difftest launcher for the CoT server. Never shipped."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+publish.workspace = true
+
+[features]
+## Enables the testkit hooks of taky-server (FakeClock, Hub settle/persist snapshot). Opt-in, so a
+## plain `cargo build --workspace` never compiles testkit code into the shipped taky-rs binary.
+difftest = ["taky-server/testkit", "taky-common/testkit"]
+
+[[bin]]
+name = "taky-rs-difftest"
+path = "src/bin/taky-rs-difftest.rs"
+required-features = ["difftest"]
+
+[dependencies]
+taky-common.workspace = true
+taky-config.workspace = true
+taky-server.workspace = true
+tokio.workspace = true
+chrono.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

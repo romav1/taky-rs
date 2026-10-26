@@ -2,7 +2,9 @@
 difftest — differential test harness Python taky <-> taky-rs (qa01, T-11; test-strategy §1.3, §4.1).
 
     tools/difftest/difftest --target py --all            # Python vs Python (self-check of the harness)
-    tools/difftest/difftest --target rs --only D         # Python vs Rust DPS (taky_dps-rs; CoT/unit N/A until T-30)
+    tools/difftest/difftest --target rs --only D         # Python vs Rust DPS (taky_dps-rs)
+    tools/difftest/difftest --target rs --only V         # Python vs Rust CoT (taky-rs-difftest launcher)
+    tools/difftest/difftest --target rs --rs-cot bin --only V   # ... vs the plain taky-rs binary
     tools/difftest/difftest --target py --only V04,D01   # subset by id prefix
     tools/difftest/difftest --target py shared/spec/vectors/cot/V001.json ...
 
@@ -104,21 +106,25 @@ def run_pass(label, target, vectors, args, redis):
     return results
 
 
-def oracle(vec, res, target_name, args):
+def oracle(vec, res, target_name, args, hooks=True):
     if "error" in res:
         return [res["error"]]
     if vec["runner"] == "cot":
+        if not hooks:
+            vec = compare.strip_memory_persist(vec)
         return compare.oracle_cot(vec, res["obs"], res["serials"], args.mode, target_name, args.taky_src)
     if vec["runner"] == "dps":
         return compare.oracle_dps(vec, res["obs"], target_name)
     return compare.oracle_unit(vec, res["obs"], target_name)
 
 
-def differential(vec, ra, rb, skip_divergent):
+def differential(vec, ra, rb, skip_divergent, hooks=True):
     if "error" in ra or "error" in rb:
         return [{"where": "run", "class": "harness", "a": ra.get("error"), "b": rb.get("error")}]
     a = compare.masked(ra["obs"], ra["serials"])
     b = compare.masked(rb["obs"], rb["serials"])
+    if vec["runner"] == "cot" and not hooks:
+        a, b = compare.strip_memory_persist_obs(a), compare.strip_memory_persist_obs(b)
     if vec["runner"] == "cot":
         return compare.diff_cot(vec, a, b, skip_divergent)
     if vec["runner"] == "dps":
@@ -155,6 +161,9 @@ def main():
     ap.add_argument("--py-ip", default=os.environ.get("PYREF_BIND_IP", "127.0.0.2"))
     ap.add_argument("--rs-ip", default="127.0.0.3")
     ap.add_argument("--rs-bin", help="directory with taky-rs binaries (default <taky-rs>/target/debug)")
+    ap.add_argument("--rs-cot", default="launcher", choices=["launcher", "bin"],
+                    help="Rust CoT process: launcher = taky-rs-difftest (frozen clock + hooks, default); "
+                         "bin = the plain taky-rs binary (vectors needing a clock are N/A)")
     ap.add_argument("--vectors-dir", default=os.path.join(OFFICE, "shared", "spec", "vectors"))
     ap.add_argument("--taky-src", default=os.environ.get("TAKY_SRC", os.path.join(OFFICE, "taky")))
     ap.add_argument("--state", default=os.path.join(TOOL_DIR, ".state"))
@@ -178,7 +187,7 @@ def main():
     if args.target == "py":
         runs = [("py-1", py), ("py-2", PyTarget(args.py_ip, sys.executable, args.taky_src, tools, tmp))]
     else:
-        runs = [("py-1", py), ("rs-1", RsTarget(args.rs_ip, args.rs_bin))]
+        runs = [("py-1", py), ("rs-1", RsTarget(args.rs_ip, args.rs_bin, args.rs_cot))]
 
     redis = None
     if any("redis" in v.get("requires", []) for v in vectors):
@@ -211,11 +220,14 @@ def main():
                          "seconds": [ra.get("seconds"), rb.get("seconds")]})
             print(f"N/A  {vec['id']:5} target unavailable: {why}")
             continue
+        hooks = getattr(tb, "hooks", True)
         oa = oracle(vec, ra, ta.name, args)
-        ob = oracle(vec, rb, tb.name, args)
+        ob = oracle(vec, rb, tb.name, args, hooks)
         lint = vecfmt.lint(vec)
-        divs = differential(vec, ra, rb, skip_div)
+        divs = differential(vec, ra, rb, skip_div, hooks)
         skipped = sorted(set(ra.get("skipped", []) + rb.get("skipped", [])))
+        if vec["runner"] == "cot" and not hooks and "persist-hook" in vec.get("requires", []):
+            skipped.append("memory persist (no hook in the plain taky-rs binary)")
         status = "PASS" if not (oa or ob or divs or lint) else "FAIL"
         rows.append({"id": vec["id"], "runner": vec["runner"], "status": status, "oracle_a": oa + lint,
                      "oracle_b": ob, "divergences": divs, "skipped_checks": skipped,
