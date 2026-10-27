@@ -355,7 +355,7 @@ without limit — rotate or clean it, especially on an SD card.
 A multi-arch image (`taky-rs`, linux/amd64, linux/arm64, linux/arm/v7) is built from the
 static release binaries. It runs as a non-root user, with volumes for `/etc/taky` and
 `/var/taky`. First-run setup, `build_client`, upgrades and a compose file with Redis are
-described in `packaging/docker/README.md`.
+described in [packaging/docker/README.md](../packaging/docker/README.md).
 
 ## Raspberry Pi notes
 

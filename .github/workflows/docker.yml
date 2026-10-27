@@ -1,6 +1,7 @@
 # taky-rs Docker image (ADR-007, T-12): linux/amd64, linux/arm64, linux/arm/v7 from musl binaries
 # (no compiling under qemu). Pushed to GHCR ONLY on tags v*; other runs build and smoke-test only.
 # Image: ghcr.io/<repository owner, lowercased>/taky-rs — derived from github context, no hard-coded owner.
+# Every run also smoke-tests packaging/docker/compose.yaml exactly as its README describes it.
 name: docker
 
 on:
@@ -71,6 +72,19 @@ jobs:
       PUSH: ${{ startsWith(github.ref, 'refs/tags/v') }}
     steps:
       - uses: actions/checkout@v4
+      # ADR-007 errata 4: base images must be pinned by digest before the first v* tag.
+      - name: Base image digests (paste into the FROM lines / compose.yaml to pin)
+        run: |
+          for i in busybox:1.36.1-musl gcr.io/distroless/static-debian12:nonroot redis:7.2.7-alpine; do
+            echo "$i@$(docker buildx imagetools inspect "$i" --format '{{json .Manifest}}' | jq -r .digest)"
+          done | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Release guard (FROM images pinned by digest)
+        if: env.PUSH == 'true'
+        run: |
+          if grep -E '^FROM ' packaging/docker/Dockerfile | grep -v '@sha256:'; then
+            echo "::error::pin the FROM images above by digest before a release tag (see the previous step)"
+            exit 1
+          fi
       - uses: actions/download-artifact@v4
         with:
           pattern: docker-*
@@ -115,6 +129,56 @@ jobs:
           docker run --rm taky-rs:smoke taky-rs --version
           docker run --rm taky-rs:smoke taky_dps-rs --version
           docker run --rm taky-rs:smoke takyctl-rs --version
+      - name: Image layout (only /etc/taky and /var/taky belong to 65532)
+        run: |
+          cid="$(docker create taky-rs:smoke)"
+          docker export "$cid" | tar -tv --numeric-owner -f - \
+            | awk '{n=$6; sub(/\/$/, "", n)} n ~ /^(etc|var|etc\/taky|var\/taky|usr\/local\/bin\/taky-rs)$/ {print $1, $2, n}' \
+            | sort -k3 | tee layout.txt
+          docker rm "$cid" >/dev/null
+          for l in 'drwxr-x--- 65532/65532 etc/taky' 'drwxr-x--- 65532/65532 var/taky' \
+                   '-rwxr-xr-x 0/0 usr/local/bin/taky-rs'; do
+            grep -qxF -e "$l" layout.txt || { echo "::error::expected '$l'"; exit 1; }
+          done
+          [[ "$(awk '($3=="etc"||$3=="var") && $2=="0/0"' layout.txt | wc -l)" == 2 ]] \
+            || { echo "::error::/etc and /var must stay root-owned"; exit 1; }
+      - name: Compose smoke test (packaging/docker/README.md first run)
+        env:
+          TAKY_RS_IMAGE: taky-rs:smoke
+        run: |
+          set -euo pipefail
+          dc() { docker compose -f packaging/docker/compose.yaml "$@"; }
+          bb() { docker run --rm "$@"; }
+          dc config -q
+          dc run --rm -T --no-deps taky-rs takyctl-rs setup --host smoke --public-ip 127.0.0.1
+          bb --user 65532:65532 -v taky-rs-etc:/etc/taky busybox:1.36.1-musl \
+            sed -i 's|^redis$|redis = redis://redis:6379/0|' /etc/taky/taky.conf
+          dc up -d --wait --wait-timeout 120
+          dc exec -T taky-rs takyctl-rs status
+          dc exec -T taky-rs takyctl-rs build_client JENNY
+          dc cp taky-rs:/var/taky/JENNY.zip .
+          unzip -l JENNY.zip
+          dc exec -T taky-rs takyctl-rs build_client --dump_pem BOB
+          mkdir -m 0777 out
+          bb --user 65532:65532 -v taky-rs-etc:/etc/taky:ro -v taky-rs-var:/var/taky -v "$PWD/out":/out \
+            busybox:1.36.1-musl sh -c 'cp /var/taky/BOB-*.crt /out/bob.crt && cp /var/taky/BOB-*.key /out/bob.key \
+              && cp /etc/taky/ssl/ca.crt /out/ && rm /var/taky/JENNY.zip /var/taky/BOB*'
+          curl -fsS --cacert out/ca.crt --cert out/bob.crt --key out/bob.key \
+            --resolve smoke:8443:127.0.0.1 https://smoke:8443/Marti/api/version | tee version.txt
+          grep -q '^taky-rs-' version.txt
+          dc logs taky-rs | grep -F 'Connecting to redis://redis:6379/0'
+          dc stop
+          bb -v taky-rs-etc:/etc/taky:ro -v taky-rs-var:/var/taky:ro -v taky-rs-redis:/data:ro \
+            -v "$PWD":/backup busybox:1.36.1-musl \
+            sh -c 'umask 077; tar -czf /backup/taky-rs-backup.tar.gz -C / etc/taky var/taky data'
+          tar -tzf taky-rs-backup.tar.gz | grep -qx 'etc/taky/ssl/ca.key'
+      - name: Compose logs and cleanup
+        if: always()
+        env:
+          TAKY_RS_IMAGE: taky-rs:smoke
+        run: |
+          docker compose -f packaging/docker/compose.yaml logs --no-color || true
+          docker compose -f packaging/docker/compose.yaml down -v || true
       - name: Log in to GHCR
         if: env.PUSH == 'true'
         uses: docker/login-action@v3

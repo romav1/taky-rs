@@ -1,0 +1,74 @@
+# taky-rs with Docker Compose: CoT server + Data Package Server + Redis.
+# First run, build_client, upgrade and backup: README.md in this directory.
+#
+#   echo 'TAKY_RS_IMAGE=ghcr.io/<owner>/taky-rs:1.0.0' > .env
+#   docker compose run --rm --no-deps taky-rs takyctl-rs setup --host <name> --public-ip <IP>
+#   docker compose up -d
+#
+# Both servers read /etc/taky/taky.conf (written by `takyctl-rs setup`). For Redis set
+# `redis = redis://redis:6379/0` in [taky] (README "Use Redis"); without it the CoT server
+# keeps its persisted items in memory and the redis service is unused.
+
+name: taky-rs
+
+x-taky: &taky
+  image: ${TAKY_RS_IMAGE:?set TAKY_RS_IMAGE (e.g. in .env) to ghcr.io/<owner>/taky-rs:<version>}
+  user: "65532:65532"   # the image's default (distroless "nonroot"); never root
+  init: true
+  restart: unless-stopped
+  cap_drop: [ALL]
+  security_opt: ["no-new-privileges:true"]
+  environment:
+    TZ: UTC
+  volumes:
+    - etc:/etc/taky     # taky.conf, ssl/ (CA key!), cert-db.txt
+    - var:/var/taky     # taky-mgmt.sock, dp-user/ (uploaded data packages)
+
+services:
+  taky-rs:
+    <<: *taky
+    command: ["taky-rs", "-l", "info"]
+    read_only: true   # writes only to the volumes; give `log_cot` a path under /var/taky
+    ports:
+      - "8089:8089"     # CoT over TLS ([cot_server] port; 8087 with `setup --no-ssl`)
+      # - "8087:8087"   # monitor port, only if [cot_server] mon_ip is set
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      # Asks the running server over /var/taky/taky-mgmt.sock; exit 1 if it does not answer.
+      test: ["CMD", "takyctl-rs", "status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  taky-dps-rs:
+    <<: *taky
+    command: ["taky_dps-rs"]
+    # Not read_only: uploads are spooled to $TMPDIR (/tmp) before they are stored.
+    ports:
+      - "8443:8443"     # Data Package Server over TLS (8080 with `setup --no-ssl`)
+    # No healthcheck: the image has no HTTP client and the DPS requires a client certificate.
+
+  redis:
+    # 7.2 is the last BSD-licensed Redis line; valkey/valkey:8 is a drop-in alternative.
+    image: redis:7.2.7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "60", "1"]
+    volumes:
+      - redis:/data
+    # Not published on the host: only the CoT server talks to it (redis://redis:6379/0).
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  etc:
+    name: taky-rs-etc
+  var:
+    name: taky-rs-var
+  redis:
+    name: taky-rs-redis
