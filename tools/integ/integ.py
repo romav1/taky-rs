@@ -5,7 +5,7 @@ the same generated config + test PKI (Python on 127.0.0.6, Rust on 127.0.0.7), d
 probes (openssl s_client, python ssl, AF_UNIX mgmt client, signals) and compares the observable outcome.
 A case passes when both targets match the expectation; a documented deviation (D-n) is checked explicitly.
 
-Run (opt-in, not part of scripts/check.sh):  tools/integ/integ            (all groups, ~2-3 min)
+Run (opt-in, not part of scripts/check.sh):  tools/integ/integ            (all groups incl. S-404 dps/cli, ~2 min)
                                              tools/integ/integ --only tls,mgmt
 Env: TAKY_RS_BIN (default target/debug/taky-rs), S403_TMP (default /tmp/s403-integ; keep it short: AF_UNIX
 paths must stay < 108 bytes), INTEG_LONG_DIR (parent for the long-socket-path case).
@@ -148,10 +148,12 @@ class Pki:
         return os.path.join(self.d, n)
 
     def _builder(self, cn, key, nb, na, issuer):
+        # AKI: Python 3.13 ssl (VERIFY_X509_STRICT, used by gunicorn's DPS context) rejects leaf certs without it
         return (x509.CertificateBuilder().subject_name(_name(cn)).issuer_name(issuer.subject)
                 .public_key(key.public_key()).serial_number(x509.random_serial_number())
                 .not_valid_before(nb).not_valid_after(na)
-                .add_extension(x509.BasicConstraints(ca=False, path_length=None), True))
+                .add_extension(x509.BasicConstraints(ca=False, path_length=None), True)
+                .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(issuer.public_key()), False))
 
     def _ca(self, cn, now):
         k = _key()
@@ -160,6 +162,7 @@ class Pki:
              .not_valid_after(now + dt.timedelta(days=60))
              .add_extension(x509.BasicConstraints(ca=True, path_length=None), True)
              .add_extension(x509.KeyUsage(True, False, False, False, False, True, True, False, False), True)
+             .add_extension(x509.SubjectKeyIdentifier.from_public_key(k.public_key()), False)
              .sign(k, hashes.SHA256()))
         return k, c
 
@@ -713,11 +716,13 @@ def g_tls():
     case = "tls-keyempty"
     srvs = {t: Srv(t, site(case, t, over={"ssl": {"cert": PKI.p("server-combined.pem"), "key": ""}})).start()
             for t in TGTS}
-    ok = wait_listen(srvs.values(), TLS_PORT, 8)
-    rcs = {t: (srvs[t].p.poll() if not ok[t] else "up") for t in TGTS}
-    rec(row, f"{case}.start", "`key =` (empty) with key inside cert file", rcs["py"], rcs["rs"], rcs["py"] == rcs["rs"],
-        "Python: keyfile='' -> load_cert_chain error, exit 1; Rust treats empty as unset and starts",
-        open_q="MSG-20261026-qa01-06 (an01 D-n question)")
+    rcs = {t: srvs[t].wait_exit(15) for t in TGTS}
+    both(row, f"{case}.exit", "`key =` (empty) with key inside cert file: startup fails, exit 1", rcs, 1,
+         "parity after S-403b (an01 S-A06 Q1): empty key is a path, not unset")
+    msg = {t: ("ERROR:COTServer:Unable to load SSL certificate: " in srvs[t].log()
+               and "ERROR:root:Unable to start COTServer: " in srvs[t].log()) for t in TGTS}
+    both(row, f"{case}.msg", "ERROR 'Unable to load SSL certificate' + 'Unable to start COTServer'", msg, True)
+    both(row, f"{case}.sock", "no mgmt socket left", {t: os.path.exists(srvs[t].sock) for t in TGTS}, False)
     for t in TGTS:
         srvs[t].stop()
 
@@ -889,10 +894,10 @@ def g_mgmt():
                  {t: (ok[t], pong[t]) for t in TGTS}, (True, ['{"pong": "taky"}']))
         else:
             v = {t: (ok[t], pong[t][:1]) for t in TGTS}
-            rec(row, f"{case}", "dangling symlink at socket path: (CoT up, mgmt ping)", v["py"], v["rs"],
-                v["py"] == v["rs"],
-                "Python os.path.exists() follows the link (False) -> bind EADDRINUSE -> runs without mgmt; "
-                "Rust symlink_metadata -> removes the link and binds", open_q="MSG-20261026-qa01-06 (an01 D-n question)")
+            expect(row, f"{case}", "dangling symlink at socket path: (CoT up, mgmt ping)", v,
+                   (True, ['<connect error: FileNotFoundError>']), (True, ['{"pong": "taky"}']),
+                   "D-28 (an01 S-A06 Q2): Python os.path.exists() follows the link -> bind EADDRINUSE -> runs without "
+                   "mgmt; Rust symlink_metadata -> removes the link (not its target) and binds")
         for t in TGTS:
             srvs[t].stop()
 
@@ -1091,7 +1096,18 @@ def g_process():
     both(row, "proc.bad-mon-port", "ssl on, mon_port = 0: exit 1, 'Invalid port: 0'", v, (1, True), "D-13 text")
 
 
-GROUPS = {"tls": g_tls, "monitor": g_monitor, "mgmt": g_mgmt, "process": g_process}
+def _ext(modname, fn):
+    """Group implemented in a sibling module (S-404): called with this (running) module as its helper API."""
+    def run():
+        import importlib
+        if HERE not in sys.path:
+            sys.path.insert(0, HERE)  # -I drops the script dir from sys.path
+        getattr(importlib.import_module(modname), fn)(sys.modules[__name__])
+    return run
+
+
+GROUPS = {"tls": g_tls, "monitor": g_monitor, "mgmt": g_mgmt, "process": g_process,
+          "dps": _ext("integ_dps", "g_dps"), "cli": _ext("integ_cli", "g_cli")}
 
 
 def main():
