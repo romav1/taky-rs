@@ -1,0 +1,401 @@
+#!/usr/bin/env python3
+# memwatch - memory / file-descriptor sampler for taky-rs soak tests (qa01, S-506; test-strategy §1.8, §4.4).
+# Python 3.8+ standard library only, Linux /proc. MIT license (same as taky-rs).
+#
+# Sample (writes one CSV line per process per interval, flushed at once, so a killed run keeps its data):
+#   memwatch sample --name taky-rs --name taky_dps-rs --interval 10 --duration 24h --out rss.csv
+#   memwatch sample --pid 1234 --interval 10 --out rss.csv          (or: memwatch --pid 1234 ... - "sample" is the default)
+#   memwatch sample --cmd "taky-rs -c ./taky.conf" --duration 2h --out rss.csv   (starts the command, stops it at the end)
+# Analyze (exit 0 = PASS, 1 = a threshold is violated, 2 = not enough data / bad input):
+#   memwatch analyze rss.csv --warmup 30m --max-slope 1MB/h --max-rss 128MB [--min-window 1h] [--max-fd-growth 10]
+#                        [--json report.json]
+#
+# Columns: time_utc, elapsed_s, name, pid, state, rss_kb (VmRSS), hwm_kb (VmHWM), anon_kb (RssAnon), pss_kb
+# (smaps_rollup Pss), fds, threads, cpu_s (utime+stime), sys_avail_kb (MemAvailable). Empty = not readable
+# (another user's process without root: run with sudo). state = "ok" or "absent" (process not found).
+# Units: KB/MB/GB here are binary (KiB/MiB/GiB), like /proc and `ps`.
+import argparse
+import csv
+import datetime as dt
+import json
+import os
+import re
+import shlex
+import signal
+import subprocess
+import sys
+import time
+
+FIELDS = ["time_utc", "elapsed_s", "name", "pid", "state", "rss_kb", "hwm_kb", "anon_kb", "pss_kb",
+          "fds", "threads", "cpu_s", "sys_avail_kb"]
+CLK_TCK = os.sysconf("SC_CLK_TCK") if hasattr(os, "sysconf") else 100
+
+
+# ---------------------------------------------------------------- parsing helpers
+def parse_duration(text):
+    """'90' / '90s' / '30m' / '1.5h' / '2d' -> seconds (float)."""
+    m = re.fullmatch(r"\s*([0-9]*\.?[0-9]+)\s*([smhd]?)\s*", str(text))
+    if not m:
+        raise argparse.ArgumentTypeError("bad duration %r (use e.g. 90s, 30m, 24h)" % text)
+    return float(m.group(1)) * {"": 1, "s": 1, "m": 60, "h": 3600, "d": 86400}[m.group(2)]
+
+
+def parse_size_kb(text):
+    """'128MB' / '512KB' / '1GB' / '131072' (KB) -> KiB (float)."""
+    m = re.fullmatch(r"\s*([0-9]*\.?[0-9]+)\s*(K|KB|KIB|M|MB|MIB|G|GB|GIB)?\s*", str(text), re.I)
+    if not m:
+        raise argparse.ArgumentTypeError("bad size %r (use e.g. 128MB)" % text)
+    unit = (m.group(2) or "KB").upper()[0]
+    return float(m.group(1)) * {"K": 1, "M": 1024, "G": 1024 * 1024}[unit]
+
+
+def parse_slope_kb_h(text):
+    """'1MB/h' / '256KB/h' / '24MB/d' -> KiB per hour."""
+    m = re.fullmatch(r"\s*(.+?)\s*/\s*([smhd])\s*", str(text))
+    if not m:
+        raise argparse.ArgumentTypeError("bad slope %r (use e.g. 1MB/h)" % text)
+    per = {"s": 1 / 3600, "m": 1 / 60, "h": 1, "d": 24}[m.group(2)]
+    return parse_size_kb(m.group(1)) / per
+
+
+def fmt_mb(kb):
+    return "-" if kb is None else "%.1f MB" % (kb / 1024.0)
+
+
+# ---------------------------------------------------------------- /proc readers
+def read_text(path):
+    try:
+        with open(path, "r") as fp:
+            return fp.read()
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
+def status_kb(text, key):
+    m = re.search(r"^%s:\s+(\d+)" % re.escape(key), text or "", re.M)
+    return int(m.group(1)) if m else None
+
+
+def find_pids(name):
+    """PIDs whose /proc/<pid>/comm equals name (comm is truncated to 15 chars by the kernel)."""
+    want = name[:15]
+    found = []
+    for entry in os.listdir("/proc"):
+        if entry.isdigit():
+            comm = read_text("/proc/%s/comm" % entry)
+            if comm is not None and comm.strip() == want:
+                found.append(int(entry))
+    return sorted(found)
+
+
+def sample_pid(pid):
+    status = read_text("/proc/%d/status" % pid)
+    if status is None:
+        return None
+    row = {
+        "rss_kb": status_kb(status, "VmRSS"),
+        "hwm_kb": status_kb(status, "VmHWM"),
+        "anon_kb": status_kb(status, "RssAnon"),
+        "threads": status_kb(status, "Threads"),
+        "pss_kb": status_kb(read_text("/proc/%d/smaps_rollup" % pid), "Pss"),
+        "fds": None,
+        "cpu_s": None,
+    }
+    try:
+        row["fds"] = len(os.listdir("/proc/%d/fd" % pid))
+    except OSError:
+        pass
+    stat = read_text("/proc/%d/stat" % pid)
+    if stat:
+        rest = stat[stat.rfind(")") + 2:].split()
+        try:
+            row["cpu_s"] = round((int(rest[11]) + int(rest[12])) / float(CLK_TCK), 2)
+        except (IndexError, ValueError):
+            pass
+    return row
+
+
+# ---------------------------------------------------------------- sample
+STOP = False
+
+
+def _stop(_signum, _frame):
+    global STOP
+    STOP = True
+
+
+def cmd_sample(args):
+    if not (args.pid or args.name or args.cmd):
+        sys.exit("memwatch: give --pid, --name or --cmd")
+    proc = None
+    targets = []  # (label, fixed_pid or None)
+    if args.cmd:
+        proc = subprocess.Popen(shlex.split(args.cmd))
+        targets.append((os.path.basename(shlex.split(args.cmd)[0])[:15], proc.pid))
+    for pid in args.pid or []:
+        comm = (read_text("/proc/%d/comm" % pid) or "pid%d" % pid).strip()
+        targets.append((comm, pid))
+    for name in args.name or []:
+        targets.append((name, None))
+
+    signal.signal(signal.SIGINT, _stop)
+    signal.signal(signal.SIGTERM, _stop)
+    new_file = not os.path.exists(args.out) or os.path.getsize(args.out) == 0
+    out = open(args.out, "a", newline="")
+    writer = csv.DictWriter(out, fieldnames=FIELDS)
+    if new_file:
+        writer.writeheader()
+    start = time.monotonic()
+    next_at = start
+    n = 0
+    sys.stderr.write("memwatch: sampling %s every %gs -> %s%s\n" % (
+        ", ".join(t[0] if t[1] is None else "%s(%d)" % t for t in targets), args.interval, args.out,
+        "" if not args.duration else " for %gs" % args.duration))
+    while not STOP:
+        now = time.monotonic()
+        elapsed = now - start
+        if args.duration and elapsed > args.duration + 0.5:
+            break
+        ts = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        avail = status_kb(read_text("/proc/meminfo"), "MemAvailable")
+        for label, fixed in targets:
+            pids = [fixed] if fixed is not None else find_pids(label)
+            rows = []
+            for pid in pids:
+                data = sample_pid(pid)
+                if data is not None:
+                    rows.append((pid, data))
+            if not rows:
+                writer.writerow({"time_utc": ts, "elapsed_s": "%.1f" % elapsed, "name": label, "pid": "",
+                                 "state": "absent", "sys_avail_kb": avail})
+            for pid, data in rows:
+                rec = {"time_utc": ts, "elapsed_s": "%.1f" % elapsed, "name": label, "pid": pid, "state": "ok",
+                       "sys_avail_kb": avail}
+                rec.update({k: ("" if v is None else v) for k, v in data.items()})
+                writer.writerow(rec)
+        out.flush()
+        n += 1
+        if proc is not None and proc.poll() is not None:
+            sys.stderr.write("memwatch: command exited with %s\n" % proc.returncode)
+            break
+        next_at += args.interval
+        while not STOP and time.monotonic() < next_at:
+            time.sleep(min(0.5, max(0.0, next_at - time.monotonic())))
+    out.close()
+    if proc is not None and proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(10)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+    sys.stderr.write("memwatch: %d samples written to %s\n" % (n, args.out))
+    return 0
+
+
+# ---------------------------------------------------------------- analyze
+def linreg(xs, ys):
+    n = len(xs)
+    if n < 2:
+        return None
+    mx, my = sum(xs) / n, sum(ys) / n
+    sxx = sum((x - mx) ** 2 for x in xs)
+    if sxx == 0:
+        return None
+    return sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / sxx
+
+
+def num(v):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return None
+
+
+def analyze_series(name, rows, args):
+    """rows: list of dicts of one process name, in time order. Returns a report dict."""
+    rep = {"name": name, "checks": [], "verdict": "PASS"}
+
+    def check(label, ok, detail):
+        rep["checks"].append({"check": label, "result": ok, "detail": detail})
+        if ok == "FAIL" and rep["verdict"] != "NO-DATA":
+            rep["verdict"] = "FAIL"
+
+    ok_rows = [r for r in rows if r["state"] == "ok" and num(r.get(args.metric)) is not None]
+    pids = []
+    for r in rows:
+        if r["state"] == "ok" and r["pid"] and (not pids or pids[-1] != r["pid"]):
+            pids.append(r["pid"])
+    absent = sum(1 for r in rows if r["state"] != "ok")
+    rep.update({"samples": len(rows), "absent_samples": absent, "pids": pids})
+    if len(ok_rows) < 3:
+        rep["verdict"] = "NO-DATA"
+        rep["checks"].append({"check": "data", "result": "NO-DATA", "detail": "%d usable samples" % len(ok_rows)})
+        return rep
+    # the regression uses the last process instance (a restart starts a new series)
+    last_pid = ok_rows[-1]["pid"]
+    series = [r for r in ok_rows if r["pid"] == last_pid]
+    t = [num(r["elapsed_s"]) for r in series]
+    y = [num(r[args.metric]) for r in series]
+    t0, t_end = t[0], t[-1]
+    span_h = (t_end - t0) / 3600.0
+    rep.update({"metric": args.metric, "duration_h": round(span_h, 3), "first_kb": y[0], "last_kb": y[-1],
+                "max_kb": max(y), "min_kb": min(y)})
+    hwm = [num(r["hwm_kb"]) for r in series if num(r.get("hwm_kb")) is not None]
+    rep["hwm_kb"] = max(hwm) if hwm else None
+
+    # restarts / gaps
+    restarts = len(pids) - 1
+    if restarts or absent:
+        check("process stayed up", "PASS" if args.allow_restart else "FAIL",
+              "%d restart(s) (pids %s), %d sample(s) with the process absent" % (restarts, " ".join(pids), absent))
+    else:
+        check("process stayed up", "PASS", "one pid (%s), no gaps" % last_pid)
+
+    # max RSS (whole series, including warm-up)
+    check("max %s <= %s" % (args.metric, fmt_mb(args.max_rss)), "PASS" if max(y) <= args.max_rss else "FAIL",
+          "max %s" % fmt_mb(max(y)))
+
+    # slope after warm-up
+    win = [(ti, yi) for ti, yi in zip(t, y) if ti - t0 >= args.warmup]
+    if len(win) >= 3 and (win[-1][0] - win[0][0]) >= 60:
+        slope = linreg([(ti - t0) / 3600.0 for ti, _ in win], [yi for _, yi in win])
+        rep["slope_kb_h"] = round(slope, 1)
+        rep["window_h"] = round((win[-1][0] - win[0][0]) / 3600.0, 3)
+        label = "slope after %gm warm-up <= %s/h" % (args.warmup / 60, fmt_mb(args.max_slope))
+        detail = "%+.2f MB/h over %.2f h (%d samples)" % (slope / 1024, rep["window_h"], len(win))
+        if win[-1][0] - win[0][0] >= args.min_window:
+            check(label, "PASS" if slope <= args.max_slope else "FAIL", detail)
+        else:  # a few minutes cannot tell a leak from a warm-up step: report, do not judge
+            rep["checks"].append({"check": label, "result": "NO-DATA", "detail": detail + "; window shorter than "
+                                  "--min-window %gm, not judged" % (args.min_window / 60)})
+            rep["verdict"] = "NO-DATA" if rep["verdict"] == "PASS" else rep["verdict"]
+        half = [(ti, yi) for ti, yi in win if ti >= (win[0][0] + win[-1][0]) / 2]
+        s2 = linreg([(ti - t0) / 3600.0 for ti, _ in half], [yi for _, yi in half])
+        if s2 is not None:
+            rep["slope_last_half_kb_h"] = round(s2, 1)
+    else:
+        rep["checks"].append({"check": "slope after warm-up", "result": "NO-DATA",
+                              "detail": "the run is shorter than the warm-up (%gm) plus 1 min" % (args.warmup / 60)})
+        rep["verdict"] = "NO-DATA" if rep["verdict"] == "PASS" else rep["verdict"]
+
+    # final <= 1.1 x hour 1 (only for runs of 2 h or more)
+    if span_h >= 2:
+        h1 = min(zip(t, y), key=lambda p: abs(p[0] - t0 - 3600))[1]
+        rep["hour1_kb"] = h1
+        check("final <= %.2f x hour 1" % args.max_growth, "PASS" if y[-1] <= args.max_growth * h1 else "FAIL",
+              "hour 1 %s, final %s (x%.3f)" % (fmt_mb(h1), fmt_mb(y[-1]), y[-1] / h1 if h1 else 0))
+
+    # file descriptors
+    fds = [num(r["fds"]) for r in series if num(r.get("fds")) is not None]
+    if fds:
+        rep.update({"fds_first": fds[0], "fds_last": fds[-1], "fds_max": max(fds)})
+        growth = fds[-1] - fds[0]
+        if args.max_fd_growth is not None:
+            check("fds back to baseline (+%d)" % args.max_fd_growth, "PASS" if growth <= args.max_fd_growth else "FAIL",
+                  "first %d, last %d, max %d" % (fds[0], fds[-1], max(fds)))
+        else:
+            rep["checks"].append({"check": "fds (info)", "result": "INFO",
+                                  "detail": "first %d, last %d, max %d" % (fds[0], fds[-1], max(fds))})
+    else:
+        rep["checks"].append({"check": "fds", "result": "INFO", "detail": "not readable (run memwatch with sudo)"})
+
+    # hourly table (median of each hour; or of each tenth of a short run)
+    bucket = 3600.0 if span_h >= 2 else max(60.0, (t_end - t0) / 10.0)
+    table = {}
+    for ti, yi in zip(t, y):
+        table.setdefault(int((ti - t0) // bucket), []).append(yi)
+    rep["buckets"] = [{"from_s": round(k * bucket), "median_kb": sorted(v)[len(v) // 2]} for k, v in sorted(table.items())]
+    rep["bucket_s"] = bucket
+    return rep
+
+
+def cmd_analyze(args):
+    try:
+        with open(args.csv, newline="") as fp:
+            rows = list(csv.DictReader(fp))
+    except OSError as e:
+        print("memwatch: %s" % e, file=sys.stderr)
+        return 2
+    if not rows or args.metric not in rows[0]:
+        print("memwatch: %s: no data or no column %s" % (args.csv, args.metric), file=sys.stderr)
+        return 2
+    names = []
+    for r in rows:
+        if r["name"] not in names:
+            names.append(r["name"])
+    if args.only:
+        names = [n for n in names if n in args.only]
+    reports = [analyze_series(n, [r for r in rows if r["name"] == n], args) for n in names]
+    overall = "PASS"
+    if any(r["verdict"] == "FAIL" for r in reports):
+        overall = "FAIL"
+    elif any(r["verdict"] == "NO-DATA" for r in reports) or not reports:
+        overall = "NO-DATA"
+
+    lines = ["memwatch analyze %s" % args.csv,
+             "thresholds: max %s %s, slope <= %s/h after %gm warm-up, final <= %.2f x hour 1 (runs >= 2 h)%s" % (
+                 args.metric, fmt_mb(args.max_rss), fmt_mb(args.max_slope), args.warmup / 60, args.max_growth,
+                 "" if args.max_fd_growth is None else ", fd growth <= %d" % args.max_fd_growth), ""]
+    for r in reports:
+        lines.append("== %s: %s" % (r["name"], r["verdict"]))
+        if "first_kb" in r:
+            lines.append("   %d samples over %.2f h; %s first %s, last %s, min %s, max %s; VmHWM %s" % (
+                r["samples"], r["duration_h"], r["metric"], fmt_mb(r["first_kb"]), fmt_mb(r["last_kb"]),
+                fmt_mb(r["min_kb"]), fmt_mb(r["max_kb"]), fmt_mb(r.get("hwm_kb"))))
+            if "slope_kb_h" in r:
+                lines.append("   slope %+.2f MB/h (last half %+.2f MB/h)" % (
+                    r["slope_kb_h"] / 1024, r.get("slope_last_half_kb_h", 0) / 1024))
+        for c in r["checks"]:
+            lines.append("   [%-7s] %s: %s" % (c["result"], c["check"], c["detail"]))
+        if r.get("buckets"):
+            unit = "h" if r["bucket_s"] == 3600 else "min"
+            div = 3600.0 if unit == "h" else 60.0
+            lines.append("   median per %s: %s" % (
+                "hour" if unit == "h" else "%g min" % (r["bucket_s"] / 60),
+                "  ".join("%g%s=%.1f" % (b["from_s"] / div, unit, b["median_kb"] / 1024) for b in r["buckets"])))
+        lines.append("")
+    lines.append("OVERALL: %s" % overall)
+    text = "\n".join(lines)
+    print(text)
+    if args.json:
+        with open(args.json, "w") as fp:
+            json.dump({"overall": overall, "csv": args.csv, "metric": args.metric, "reports": reports}, fp, indent=1)
+    return {"PASS": 0, "FAIL": 1}.get(overall, 2)
+
+
+# ---------------------------------------------------------------- main
+def main(argv):
+    if not argv or argv[0] not in ("sample", "analyze", "-h", "--help"):
+        argv = ["sample"] + argv
+    ap = argparse.ArgumentParser(prog="memwatch", description="RSS / fd sampler and analyzer for taky-rs soak tests")
+    sub = ap.add_subparsers(dest="cmd")
+    s = sub.add_parser("sample", help="sample processes into a CSV")
+    s.add_argument("--pid", type=int, action="append", help="process id (repeatable)")
+    s.add_argument("--name", action="append", help="process name as in /proc/PID/comm, re-resolved each sample "
+                   "(survives restarts; repeatable), e.g. taky-rs, taky_dps-rs")
+    s.add_argument("--cmd", help="start this command and sample it until it exits or --duration ends")
+    s.add_argument("--interval", type=parse_duration, default=10.0, help="seconds between samples (default 10)")
+    s.add_argument("--duration", type=parse_duration, default=0, help="stop after this time (e.g. 24h); default: until Ctrl+C")
+    s.add_argument("--out", required=True, help="CSV file (appended to if it exists)")
+    a = sub.add_parser("analyze", help="check a CSV against thresholds (exit 1 on violation)")
+    a.add_argument("csv")
+    a.add_argument("--warmup", type=parse_duration, default=1800.0, help="ignored for the slope (default 30m)")
+    a.add_argument("--max-slope", type=parse_slope_kb_h, default=1024.0, help="default 1MB/h")
+    a.add_argument("--min-window", type=parse_duration, default=3600.0, help="shortest post-warm-up window on which "
+                   "the slope is judged (default 1h; shorter runs give NO-DATA)")
+    a.add_argument("--max-rss", type=parse_size_kb, default=128 * 1024.0, help="default 128MB")
+    a.add_argument("--max-growth", type=float, default=1.1, help="final <= this x hour 1 (default 1.1; runs >= 2 h)")
+    a.add_argument("--max-fd-growth", type=int, default=None, help="fail if last fds > first fds + N (use when the "
+                   "load stopped before the end of sampling)")
+    a.add_argument("--metric", default="rss_kb", choices=["rss_kb", "anon_kb", "pss_kb"], help="default rss_kb (VmRSS)")
+    a.add_argument("--only", action="append", help="analyze only this process name (repeatable)")
+    a.add_argument("--allow-restart", action="store_true", help="do not fail on restarts / absent samples")
+    a.add_argument("--json", help="also write the report as JSON")
+    args = ap.parse_args(argv)
+    if args.cmd == "analyze":
+        return cmd_analyze(args)
+    return cmd_sample(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
