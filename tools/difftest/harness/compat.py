@@ -1,8 +1,8 @@
 """
-difftest compat — data compatibility scenarios (qa01, S-405 / T-33 part 1; test-strategy §1.5 L5).
+difftest compat — data compatibility scenarios (qa01, S-405 / S-406, T-33; test-strategy §1.5 L5).
 
     tools/difftest/difftest compat C1                 # one scenario, default mode
-    tools/difftest/difftest compat all                # C1..C7
+    tools/difftest/difftest compat all                # C1..C14
     tools/difftest/difftest compat C6 --mode simultaneous
 
 The ORIGINAL Python taky / taky_dps (read-only ../taky, `python -B`, DPS through the gunicorn path exactly like
@@ -20,6 +20,9 @@ Scenarios:
   C5 foreign keyspace + broken values: purge only the own keyspace (V043); hostname with glob characters
   C6 DPS upload_path P -> R -> P: search/content/missionquery/tool, meta JSON + symlinks rewritten by the other
   C7 DPS upload_path R -> P incl. re-upload with the same UID and a new hash (PP/RR/RP/PR file trees)
+  C8..C14 (video_feed, cert-db mixed writers / 100 alternating writes, certificate 4x2 matrix, taky.conf both ways,
+  log_cot alternating, drop-in of a Python system site): compat2.py (S-406). C9-C12/C14 run once (mode "single"),
+  C13 alternate (simultaneous = both hosts log into one directory), C8 both modes.
 Opt-in (not part of scripts/check.sh). Results: <taky-rs>/target/qa/difftest/compat-<scenario>.json; exit 1 on FAIL.
 Every started server and the redis-server are stopped (SIGTERM to the process group, then SIGKILL).
 """
@@ -53,7 +56,8 @@ HOSTNAME = "compat.example"
 HOST_HDR = "taky.example:8080"
 PY_COT = 'import sys; sys.argv[0] = "taky"; from taky.cot.__main__ import main; main()'
 PY_DPS = 'import sys; sys.argv[0] = "taky_dps"; from taky.dps.__main__ import main; main()'
-SCENARIOS = ("C1", "C2", "C3", "C4", "C5", "C6", "C7")
+SCENARIOS = ("C1", "C2", "C3", "C4", "C5", "C6", "C7", "C8", "C9", "C10", "C11", "C12", "C13", "C14")
+SINGLE = ("C9", "C10", "C11", "C12", "C14")  # no alternate/simultaneous variant (own process layout)
 OTHER = {"py": "rs", "rs": "py"}
 
 CHECKS = []
@@ -225,7 +229,8 @@ class Env:
         conf = {
             "taky": {"hostname": self.extra.get("hostname", HOSTNAME), "node_id": "TAKY", "bind_ip": self.ip(tgt),
                      "root_dir": root, "redis": self.redis.url},
-            "cot_server": {"port": str(COT_PORT), "max_persist_ttl": str(self.extra.get("max_ttl", -1))},
+            "cot_server": {"port": str(COT_PORT), "max_persist_ttl": str(self.extra.get("max_ttl", -1)),
+                           **({"log_cot": self.extra["log_cot"]} if self.extra.get("log_cot") else {})},
             "dp_server": {"upload_path": self.upload},
             "ssl": {"enabled": "false", "cert_db": os.path.join(root, "cert-db.txt")},
         }
@@ -946,6 +951,22 @@ def run(sc, mode, redis):
             return sc_dps_prp(env)
         if sc == "C7":
             return sc_dps_reupload(env)
+        from . import compat2
+
+        if sc == "C8":
+            return compat2.sc_video(env)
+        if sc == "C9":
+            return compat2.sc_certdb_mixed(env)
+        if sc == "C10":
+            return compat2.sc_certdb_100(env)
+        if sc == "C11":
+            return compat2.sc_cert_matrix(env)
+        if sc == "C12":
+            return compat2.sc_conf(env)
+        if sc == "C13":
+            return compat2.sc_logcot(env) if mode == "alternate" else compat2.sc_logcot_sim(env)
+        if sc == "C14":
+            return compat2.sc_dropin(env)
     finally:
         env.stop_all()
 
@@ -953,20 +974,25 @@ def run(sc, mode, redis):
 def main(argv):
     ap = argparse.ArgumentParser(prog="difftest compat", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("scenario", nargs="+", help="C1..C7 or all")
+    ap.add_argument("scenario", nargs="+", help="C1..C14 or all")
     ap.add_argument("--mode", choices=["alternate", "simultaneous", "both"], default=None,
-                    help="default: simultaneous for C4, alternate otherwise; 'both' runs C1-C3/C6/C7 in both modes")
+                    help="default: simultaneous for C4, alternate otherwise; 'both' runs C1-C3/C6-C8/C13 in both modes")
     args = ap.parse_args(argv)
     scs = list(SCENARIOS) if "all" in args.scenario else [s.upper() for s in args.scenario]
     for s in scs:
         if s not in SCENARIOS:
             ap.error(f"unknown scenario {s}")
-    for exe in (RS_COT, RS_DPS):
+    from . import compat2
+
+    need = [RS_COT, RS_DPS] + ([compat2.RS_CTL] if set(scs) & {"C9", "C10", "C11", "C12", "C14"} else []) + \
+        ([compat2.RS_UNIT] if "C12" in scs else [])
+    for exe in need:
         if not os.access(exe, os.X_OK):
-            print(f"{exe} not found (cargo build -p taky-server --bin taky-rs -p taky-dps --bin taky_dps-rs)")
+            print(f"{exe} not found (cargo build -p taky-server --bin taky-rs -p taky-dps --bin taky_dps-rs -p takyctl "
+                  "--bin takyctl-rs; C12: cargo build -p taky-testkit --features difftest --bin taky-rs-unit)")
             return 2
     for ip in IPS.values():
-        for port in (COT_PORT, DPS_PORT, REDIS_PORT):
+        for port in (COT_PORT, DPS_PORT, REDIS_PORT, 18089, 18088, 8443, 8089, 8087):
             if listening(ip, port):
                 print(f"{ip}:{port} is busy")
                 return 2
@@ -980,6 +1006,8 @@ def main(argv):
                 modes = ["simultaneous"]
             elif sc == "C5":
                 modes = ["alternate"]
+            elif sc in SINGLE:
+                modes = ["single"]
             elif args.mode == "both":
                 modes = ["alternate", "simultaneous"]
             else:

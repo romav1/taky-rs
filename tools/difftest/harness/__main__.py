@@ -8,7 +8,7 @@ difftest — differential test harness Python taky <-> taky-rs (qa01, T-11; test
     tools/difftest/difftest --target py --only V04,D01   # subset by id prefix
     tools/difftest/difftest --target py shared/spec/vectors/cot/V001.json ...
     tools/difftest/difftest random --sessions 1000 --seed 1   # seeded random sessions (randsession.py)
-    tools/difftest/difftest compat C1 [--mode alternate|simultaneous|both]   # data compatibility C1..C7 (compat.py)
+    tools/difftest/difftest compat C1 [--mode alternate|simultaneous|both]   # data compatibility C1..C14 (compat.py, compat2.py)
 
 For every selected vector the baseline (Python) and the target are each started as LIVE processes
 (Python on 127.0.0.2, Rust on 127.0.0.3) and driven over real sockets. Two kinds of checks:
@@ -156,7 +156,7 @@ def main():
         from . import randsession
 
         return randsession.main(sys.argv[2:])
-    if len(sys.argv) > 1 and sys.argv[1] == "compat":  # data compatibility scenarios C1..C7 (S-405)
+    if len(sys.argv) > 1 and sys.argv[1] == "compat":  # data compatibility scenarios C1..C14 (S-405, S-406)
         from . import compat
 
         return compat.main(sys.argv[2:])
