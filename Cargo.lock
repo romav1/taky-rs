@@ -2407,7 +2407,7 @@ dependencies = [
 
 [[package]]
 name = "taky-common"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "chrono",
  "serde_json",
@@ -2420,7 +2420,7 @@ dependencies = [
 
 [[package]]
 name = "taky-config"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "serde_json",
  "taky-common",
@@ -2431,7 +2431,7 @@ dependencies = [
 
 [[package]]
 name = "taky-cot"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "bytes",
  "chrono",
@@ -2449,7 +2449,7 @@ dependencies = [
 
 [[package]]
 name = "taky-dps"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -2479,7 +2479,7 @@ dependencies = [
 
 [[package]]
 name = "taky-pki"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "aes 0.8.4",
  "cbc 0.1.2",
@@ -2509,7 +2509,7 @@ dependencies = [
 
 [[package]]
 name = "taky-server"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -2535,7 +2535,7 @@ dependencies = [
 
 [[package]]
 name = "taky-testkit"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "chrono",
  "serde_json",
@@ -2548,7 +2548,7 @@ dependencies = [
 
 [[package]]
 name = "taky-xml"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "proptest",
  "quick-xml",
@@ -2559,7 +2559,7 @@ dependencies = [
 
 [[package]]
 name = "takyctl"
-version = "0.1.0"
+version = "1.0.0-rc.1"
 dependencies = [
  "anyhow",
  "assert_cmd",

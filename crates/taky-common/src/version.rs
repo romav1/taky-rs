@@ -43,16 +43,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn version_is_semver_0_1_0() {
-        assert_eq!(VERSION, "0.1.0");
+    fn version_is_1_0_0_rc_1() {
+        assert_eq!(VERSION, "1.0.0-rc.1");
     }
 
     #[test]
     fn version_line_uses_basename() {
         assert_eq!(
             version_line(Some("./target/debug/takyctl-rs"), "x"),
-            "takyctl-rs version 0.1.0"
+            "takyctl-rs version 1.0.0-rc.1"
         );
-        assert_eq!(version_line(None, "taky-rs"), "taky-rs version 0.1.0");
+        assert_eq!(version_line(None, "taky-rs"), "taky-rs version 1.0.0-rc.1");
     }
 }

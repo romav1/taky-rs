@@ -1,0 +1,16 @@
+[Unit]
+Description=taky-rs CoT Server
+PartOf=taky-rs.service
+Conflicts=taky.service taky-cot.service taky-dps.service
+After=taky.service taky-cot.service taky-dps.service
+
+[Service]
+Environment="LOG_LEVEL=info"
+Restart=always
+RestartSec=3
+EnvironmentFile=-/etc/default/taky-rs
+User=taky
+ExecStart=/usr/local/bin/taky-rs -l "${LOG_LEVEL}"
+
+[Install]
+WantedBy=multi-user.target

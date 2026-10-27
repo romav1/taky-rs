@@ -2,7 +2,8 @@
 //! spec dps-cli-config §2.1).
 //!
 //! Config, bind (8443/8080), serve until SIGINT/SIGTERM, `DONE`; Python `logging` format on
-//! stderr (`-l`, `RUST_LOG`), gunicorn-style access log on stdout.
+//! stderr (`-l`, `RUST_LOG`) with one `Listening at: http[s]://<addr>` INFO line at startup (like
+//! gunicorn), gunicorn-style access log on stdout.
 
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -57,12 +58,20 @@ fn main() -> ExitCode {
     let res = rt.block_on(async move {
         let shutdown = Shutdown::new();
         let listener = taky_dps::bind(&cfg).await?;
+        let tls = cfg.ssl.enabled;
         let opts = DpsOptions {
             cfg: Arc::new(cfg),
             clock: SystemClock::shared(),
             shutdown: shutdown.clone(),
         };
         let dps = taky_dps::start(opts, listener).await?;
+        // Operators look for gunicorn's "Listening at: https://…" line (S-503).
+        taky_common::pylog!(
+            "taky.dps",
+            tracing::Level::INFO,
+            "{}",
+            taky_dps::listening_line(tls, dps.local_addr)
+        );
         wait_signal().await;
         shutdown.trigger();
         dps.join().await

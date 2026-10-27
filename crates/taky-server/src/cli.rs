@@ -35,7 +35,7 @@ pub struct Args {
     #[arg(short = 'c', value_name = "CFG_FILE")]
     pub cfg_file: Option<PathBuf>,
 
-    /// Accepted and ignored (PDB on SIGUSR1 in the original; ARCHITECTURE §2.1)
+    /// Accepted for compatibility and ignored (the original attaches PDB on SIGUSR1)
     #[arg(short = 'd')]
     pub debug: bool,
 

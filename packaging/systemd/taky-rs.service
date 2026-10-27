@@ -1,0 +1,15 @@
+[Unit]
+Description=taky-rs Server
+Wants=taky-rs-cot.service
+Wants=taky-rs-dps.service
+Conflicts=taky.service taky-cot.service taky-dps.service
+After=network.target
+After=taky.service taky-cot.service taky-dps.service
+
+[Service]
+Type=oneshot
+ExecStart=/bin/true
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

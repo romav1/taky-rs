@@ -1,5 +1,6 @@
 # taky-rs CI (ADR-007, T-12): quality gate, cross builds for the six release targets,
-# tests and smoke runs under qemu, and a GitHub release on tags v*.
+# tests and smoke runs under qemu, and a GitHub release on tags v* (per-target archives
+# taky-rs-<target>.tar.gz from scripts/build-all.sh + SHA256SUMS).
 # Repo-agnostic: uses only github.* context and GITHUB_TOKEN.
 name: ci
 
@@ -132,6 +133,21 @@ jobs:
           sudo apt-get install -y -qq qemu-user binutils-multiarch file libc6-arm64-cross libc6-armhf-cross
       - name: Unpack
         run: tar -xzf "artifact/taky-rs-${{ matrix.target }}.tar.gz"
+      # Archive layout (scripts/build-all.sh): binaries, LICENSE, README, CHANGELOG, doc/, units.
+      - name: Archive layout
+        run: |
+          d="${{ matrix.target }}"
+          for f in taky-rs taky_dps-rs takyctl-rs; do
+            test -x "$d/$f" || { echo "::error::missing executable $d/$f"; exit 1; }
+          done
+          for f in LICENSE README.md CHANGELOG.md doc/QUICKSTART.md doc/DEPLOYMENT.md \
+                   doc/MIGRATION.md doc/DEVIATIONS.md packaging/systemd/README.md \
+                   packaging/systemd/taky-rs.service packaging/systemd/taky-rs-cot.service \
+                   packaging/systemd/taky-rs-dps.service; do
+            test -f "$d/$f" || { echo "::error::missing $d/$f"; exit 1; }
+          done
+          test "$(tar -tzf "artifact/taky-rs-$d.tar.gz" | cut -d/ -f1 | sort -u)" = "$d" \
+            || { echo "::error::archive must have the single top-level directory $d/"; exit 1; }
       - name: Inspect ELF (architecture, static linking for musl)
         run: |
           file "${{ matrix.target }}"/taky-rs "${{ matrix.target }}"/taky_dps-rs "${{ matrix.target }}"/takyctl-rs
@@ -184,6 +200,9 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.ref_name }}
+        # A tag with a pre-release part (v1.0.0-rc.1) is published as a GitHub pre-release.
         run: |
-          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes \
+          pre=()
+          if [[ "$TAG" == *-* ]]; then pre=(--prerelease); fi
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --title "$TAG" --generate-notes "${pre[@]}" \
             artifacts/taky-rs-*.tar.gz artifacts/SHA256SUMS

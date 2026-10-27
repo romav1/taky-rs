@@ -4,7 +4,7 @@ members = ["crates/*"]
 resolver = "3"
 
 [workspace.package]
-version = "0.1.0"
+version = "1.0.0-rc.1"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"
@@ -22,13 +22,13 @@ expect_used = "deny"
 
 [workspace.dependencies]
 # --- internal crates ---
-taky-common = { path = "crates/taky-common", version = "0.1.0" }
-taky-config = { path = "crates/taky-config", version = "0.1.0" }
-taky-xml = { path = "crates/taky-xml", version = "0.1.0" }
-taky-cot = { path = "crates/taky-cot", version = "0.1.0" }
-taky-pki = { path = "crates/taky-pki", version = "0.1.0" }
-taky-server = { path = "crates/taky-server", version = "0.1.0" }
-taky-dps = { path = "crates/taky-dps", version = "0.1.0" }
+taky-common = { path = "crates/taky-common", version = "1.0.0-rc.1" }
+taky-config = { path = "crates/taky-config", version = "1.0.0-rc.1" }
+taky-xml = { path = "crates/taky-xml", version = "1.0.0-rc.1" }
+taky-cot = { path = "crates/taky-cot", version = "1.0.0-rc.1" }
+taky-pki = { path = "crates/taky-pki", version = "1.0.0-rc.1" }
+taky-server = { path = "crates/taky-server", version = "1.0.0-rc.1" }
+taky-dps = { path = "crates/taky-dps", version = "1.0.0-rc.1" }
 
 # --- external (ARCHITECTURE §16.1; versions checked by arch01/work/depcheck) ---
 tokio = { version = "1.53", features = ["rt-multi-thread", "macros", "net", "io-util", "signal", "sync", "time", "fs"] }

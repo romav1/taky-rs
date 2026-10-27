@@ -7,10 +7,17 @@
 #   --out    Output directory (default: dist/ in the workspace root).
 #
 # Output per built target:
-#   dist/<target>/{taky-rs,taky_dps-rs,takyctl-rs,LICENSE,README.md}
-#   dist/taky-rs-<target>.tar.gz           (release artifact, ADR-007)
-#   dist/docker/<arch>/...                 (musl targets only: Docker build context, see
-#                                           packaging/docker/Dockerfile; arch = amd64|arm64|armv7)
+#   dist/<target>/                         staged archive tree:
+#       taky-rs taky_dps-rs takyctl-rs     release binaries (0755)
+#       LICENSE README.md CHANGELOG.md
+#       doc/*.md                           operator docs (QUICKSTART, DEPLOYMENT, MIGRATION, ...)
+#       packaging/systemd/                 reference units taky-rs{,-cot,-dps}.service + README.md
+#   dist/taky-rs-<target>.tar.gz           release artifact (ADR-007): the tree above, top-level
+#                                          directory <target>/
+#   dist/SHA256SUMS                        sha256sum of every dist/taky-rs-*.tar.gz
+#   dist/docker/<arch>/...                 (musl targets only: binaries + LICENSE, Docker build
+#                                           context, see packaging/docker/Dockerfile;
+#                                           arch = amd64|arm64|armv7)
 #
 # Tools: rustup (with the target installed), and for anything but a plain host build:
 #   zig + cargo-zigbuild, e.g. `pip install ziglang cargo-zigbuild`.
@@ -42,7 +49,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --strict) STRICT=1 ;;
         --out) OUT="$(mkdir -p "$2" && cd "$2" && pwd)"; shift ;;
-        -h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         -*) echo "build-all.sh: unknown option $1" >&2; exit 64 ;;
         *) TARGETS+=("$1") ;;
     esac
@@ -133,17 +140,23 @@ for T in "${TARGETS[@]}"; do
 
     # --- stage artifacts ---
     dest="$OUT/$T"
-    rm -rf "$dest"; mkdir -p "$dest"
+    rm -rf "$dest"; mkdir -p "$dest/doc" "$dest/packaging/systemd"
     for pb in "${BINARIES[@]}"; do
         install -m 0755 "target/$T/release/${pb##*:}" "$dest/"
     done
-    install -m 0644 LICENSE README.md "$dest/"
-    tar -C "$OUT" -czf "$OUT/taky-rs-$T.tar.gz" "$T"
+    install -m 0644 LICENSE README.md CHANGELOG.md "$dest/"
+    install -m 0644 doc/*.md "$dest/doc/"
+    install -m 0644 packaging/systemd/*.service packaging/systemd/README.md "$dest/packaging/systemd/"
+    # Reproducible-ish archive: sorted names, root-owned entries, mtime of the last commit.
+    mtime="$(git log -1 --format=%ct 2>/dev/null || date +%s)"
+    tar -C "$OUT" --sort=name --owner=0 --group=0 --numeric-owner --mtime="@$mtime" \
+        -czf "$OUT/taky-rs-$T.tar.gz" "$T"
 
     arch="$(docker_arch "$T")"
     if [[ -n "$arch" ]]; then
         rm -rf "$OUT/docker/$arch"; mkdir -p "$OUT/docker/$arch"
-        cp -p "$dest"/* "$OUT/docker/$arch/"
+        for pb in "${BINARIES[@]}"; do cp -p "$dest/${pb##*:}" "$OUT/docker/$arch/"; done
+        cp -p "$dest/LICENSE" "$OUT/docker/$arch/"
     fi
     echo "    OK: $dest (+ taky-rs-$T.tar.gz)"
     built+=("$T")

@@ -78,6 +78,7 @@ For cross builds of all targets see `scripts/build-all.sh` (needs `zig` and `car
   TLS and client certificates, banning users, Raspberry Pi notes
 - [doc/DEVIATIONS.md](doc/DEVIATIONS.md) — what behaves differently from the Python taky
 - [doc/MIGRATION.md](doc/MIGRATION.md) — switching an existing Python taky server to taky-rs
+- `packaging/systemd/` — reference systemd units (what `takyctl-rs systemd --user taky` writes)
 - `packaging/docker/` — Docker image and compose example
 
 ## Known limitations

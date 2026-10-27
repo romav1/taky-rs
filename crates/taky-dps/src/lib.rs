@@ -91,6 +91,13 @@ pub fn port(cfg: &TakyConfig) -> u16 {
     if cfg.ssl.enabled { 8443 } else { 8080 }
 }
 
+/// The startup log message, worded like gunicorn's: `Listening at: https://0.0.0.0:8443`
+/// (`http` without TLS; IPv6 addresses in brackets).
+pub fn listening_line(tls: bool, addr: SocketAddr) -> String {
+    let scheme = if tls { "https" } else { "http" };
+    format!("Listening at: {scheme}://{addr}")
+}
+
 /// Bind per config: `bind_ip:8443` with SSL, `bind_ip:8080` without; empty/unset `bind_ip` ⇒ all
 /// IPv4 addresses (gunicorn `":8443"`); a host name is resolved.
 pub async fn bind(cfg: &TakyConfig) -> std::io::Result<TcpListener> {
@@ -185,4 +192,20 @@ pub async fn start(opts: DpsOptions, listener: TcpListener) -> anyhow::Result<Ru
     let local_addr = listener.local_addr()?;
     let task = tokio::spawn(conn::accept_loop(listener, app.ctx, opts.shutdown.clone()));
     Ok(RunningDps { local_addr, task })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn listening_line_like_gunicorn() {
+        let v4: SocketAddr = "0.0.0.0:8443".parse().unwrap();
+        let v6: SocketAddr = "[::]:8080".parse().unwrap();
+        assert_eq!(
+            listening_line(true, v4),
+            "Listening at: https://0.0.0.0:8443"
+        );
+        assert_eq!(listening_line(false, v6), "Listening at: http://[::]:8080");
+    }
 }

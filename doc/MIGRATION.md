@@ -199,6 +199,7 @@ In the CoT log look for:
 
 - `Loading config file from /etc/taky/taky.conf` — the same config as before;
 - `Listening for ssl on <bind_ip>:8089` and `Management socket at /var/taky/taky-mgmt.sock`;
+- in the DPS log (`journalctl -u taky-rs-dps -b`): `Listening at: https://<bind_ip>:8443`;
 - with Redis: `Tracking N items` — N should match the count from the pre-checks (items that
   expired in the meantime are gone in both versions).
 

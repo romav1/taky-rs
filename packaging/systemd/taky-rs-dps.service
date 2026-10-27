@@ -1,0 +1,16 @@
+[Unit]
+Description=taky-rs Data Package Server
+PartOf=taky-rs.service
+Conflicts=taky.service taky-cot.service taky-dps.service
+After=taky.service taky-cot.service taky-dps.service
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=3
+EnvironmentFile=-/etc/default/taky-rs
+User=taky
+ExecStart=/usr/local/bin/taky_dps-rs
+
+[Install]
+WantedBy=multi-user.target
