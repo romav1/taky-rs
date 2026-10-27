@@ -3269,6 +3269,166 @@
    ]
   },
   {
+   "id": "fuzz_ns_uri_brace",
+   "kind": "stream",
+   "source": "case",
+   "chunks_b64": [
+    "PGV2ZW50PjxkZXRhaWw+PHggeG1sbnM9InVybjphfWIiIGs9InYiLz48cDp5IHhtbG5zOnA9InVybjpjfWQiIHA6ej0iMSIvPjwvZGV0YWlsPjwvZXZlbnQ+"
+   ],
+   "outputs": [
+    {
+     "opts": {},
+     "expect": [
+      "<event><detail><x xmlns=\"urn:a}b\" k=\"v\"/><p:y xmlns:p=\"urn:c}d\" p:z=\"1\"/></detail></event>"
+     ]
+    },
+    {
+     "opts": {
+      "pretty_print": true
+     },
+     "expect": [
+      "<event>\n  <detail>\n    <x xmlns=\"urn:a}b\" k=\"v\"/>\n    <p:y xmlns:p=\"urn:c}d\" p:z=\"1\"/>\n  </detail>\n</event>\n"
+     ]
+    },
+    {
+     "opts": {
+      "with_tail": false
+     },
+     "expect": [
+      "<event><detail><x xmlns=\"urn:a}b\" k=\"v\"/><p:y xmlns:p=\"urn:c}d\" p:z=\"1\"/></detail></event>"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "fuzz_ns_uri_brace_inherited",
+   "kind": "stream",
+   "source": "case",
+   "chunks_b64": [
+    "PHcgeG1sbnM6cD0idXJuOmN9ZCI+PGV2ZW50IHA6az0iMSI+PHA6eS8+PC9ldmVudD48L3c+"
+   ],
+   "outputs": [
+    {
+     "opts": {},
+     "expect": [
+      "<event xmlns:p=\"urn:c}d\" p:k=\"1\"><p:y/></event>"
+     ]
+    },
+    {
+     "opts": {
+      "pretty_print": true
+     },
+     "expect": [
+      "<event xmlns:p=\"urn:c}d\" p:k=\"1\">\n  <p:y/>\n</event>\n"
+     ]
+    },
+    {
+     "opts": {
+      "with_tail": false
+     },
+     "expect": [
+      "<event xmlns:p=\"urn:c}d\" p:k=\"1\"><p:y/></event>"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "fuzz_inherited_invalid_prefix",
+   "kind": "stream",
+   "source": "case",
+   "chunks_b64": [
+    "PHdyYXAgeG1sbnM6OXg9InVybjp5Ij48ZXZlbnQgdWlkPSJVIi8+PC93cmFwPg=="
+   ],
+   "outputs": [
+    {
+     "opts": {},
+     "expect": [
+      "<event uid=\"U\"/>"
+     ]
+    },
+    {
+     "opts": {
+      "pretty_print": true
+     },
+     "expect": [
+      "<event uid=\"U\"/>\n"
+     ]
+    },
+    {
+     "opts": {
+      "with_tail": false
+     },
+     "expect": [
+      "<event uid=\"U\"/>"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "fuzz_detail_invalid_prefix",
+   "kind": "stream",
+   "source": "case",
+   "chunks_b64": [
+    "PGV2ZW50PjxkZXRhaWw+PGMgYT0iMSIgeG1sbnM6MDA9InUiIGI9IjIiLz48ZCB4bWxuczpwPSJ2IiB4bWxuczo5eD0idyIgcDprPSIxIi8+PC9kZXRhaWw+PC9ldmVudD4="
+   ],
+   "outputs": [
+    {
+     "opts": {},
+     "expect": [
+      "<event><detail><c a=\"1\" xmlns:00=\"u\" b=\"2\"/><d xmlns:p=\"v\" xmlns:9x=\"w\" p:k=\"1\"/></detail></event>"
+     ]
+    },
+    {
+     "opts": {
+      "pretty_print": true
+     },
+     "expect": [
+      "<event>\n  <detail>\n    <c a=\"1\" xmlns:00=\"u\" b=\"2\"/>\n    <d xmlns:p=\"v\" xmlns:9x=\"w\" p:k=\"1\"/>\n  </detail>\n</event>\n"
+     ]
+    },
+    {
+     "opts": {
+      "with_tail": false
+     },
+     "expect": [
+      "<event><detail><c a=\"1\" xmlns:00=\"u\" b=\"2\"/><d xmlns:p=\"v\" xmlns:9x=\"w\" p:k=\"1\"/></detail></event>"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "fuzz_malformed_local",
+   "kind": "stream",
+   "source": "case",
+   "chunks_b64": [
+    "PGV2ZW50IHhtbG5zOmE9InUiPjxhOjBiIGE6MGM9IjEiLz48dyB4bWxucz0iZCI+PGE6LWIvPjwvdz48L2V2ZW50Pg=="
+   ],
+   "outputs": [
+    {
+     "opts": {},
+     "expect": [
+      "<event xmlns:a=\"u\"><a:0b a:0c=\"1\"/><w xmlns=\"d\"><a:-b/></w></event>"
+     ]
+    },
+    {
+     "opts": {
+      "pretty_print": true
+     },
+     "expect": [
+      "<event xmlns:a=\"u\">\n  <a:0b a:0c=\"1\"/>\n  <w xmlns=\"d\">\n    <a:-b/>\n  </w>\n</event>\n"
+     ]
+    },
+    {
+     "opts": {
+      "with_tail": false
+     },
+     "expect": [
+      "<event xmlns:a=\"u\"><a:0b a:0c=\"1\"/><w xmlns=\"d\"><a:-b/></w></event>"
+     ]
+    }
+   ]
+  },
+  {
    "id": "deep_pretty",
    "kind": "stream",
    "source": "case",

@@ -61,6 +61,11 @@ STREAM_CASES = {
     "qname_malformed_attrs": ['<event xmlns:a="u" a:b:c="1" :a="2" a:="3" xmlns:="v" x="4"/>'],
     "qname_malformed_elems": ['<event xmlns:a="u"><a:b:c q="1"/><a: q="1"/><:x/><w xmlns="d"><b:c:d/></w></event>'],
     "qname_two_prefixes_same_uri": ['<event xmlns:a="u" xmlns:b="u" a:x="1" b:x="2"/>'],
+    "fuzz_ns_uri_brace": ['<event><detail><x xmlns="urn:a}b" k="v"/><p:y xmlns:p="urn:c}d" p:z="1"/></detail></event>'],
+    "fuzz_ns_uri_brace_inherited": ['<w xmlns:p="urn:c}d"><event p:k="1"><p:y/></event></w>'],
+    "fuzz_inherited_invalid_prefix": ['<wrap xmlns:9x="urn:y"><event uid="U"/></wrap>'],
+    "fuzz_detail_invalid_prefix": ['<event><detail><c a="1" xmlns:00="u" b="2"/><d xmlns:p="v" xmlns:9x="w" p:k="1"/></detail></event>'],
+    "fuzz_malformed_local": ['<event xmlns:a="u"><a:0b a:0c="1"/><w xmlns="d"><a:-b/></w></event>'],
     "deep_pretty": ["<event>" + "<a>" * 70 + "</a>" * 70 + "</event>"],
 }
 

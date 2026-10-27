@@ -21,7 +21,7 @@ use quick_xml::XmlVersion;
 use quick_xml::escape::resolve_predefined_entity;
 use quick_xml::events::{BytesRef, BytesStart};
 
-use crate::chars::{first_invalid_char, is_name, is_space, is_xml_char};
+use crate::chars::{first_invalid_char, is_name, is_name_start, is_space, is_xml_char};
 use crate::decl_strip::XmlDeclStrip;
 use crate::{Element, Limits, Node, XmlError};
 
@@ -861,10 +861,20 @@ impl Tree {
 }
 
 /// `(prefix, local)` of a well-formed prefixed QName; `None` for an unprefixed name and for a
-/// malformed one (`:a`, `a:`, `a:b:c`), which libxml2 keeps verbatim as an unprefixed name.
+/// malformed one (`:a`, `a:`, `a:b:c`, a local part that is not an NCName such as `a:0s` or
+/// `xmlns:9x`), which libxml2 keeps verbatim as an unprefixed name (`xmlParseQNameHashed`:
+/// "Failed to parse QName"). `qname` is a valid `Name`, so a non-empty prefix is an NCName.
 fn split_qname(qname: &str) -> Option<(&str, &str)> {
     match qname.split_once(':') {
-        Some((p, l)) if !p.is_empty() && !l.is_empty() && !l.contains(':') => Some((p, l)),
+        Some((p, l))
+            if !p.is_empty()
+                && l.chars()
+                    .next()
+                    .is_some_and(|c| c != ':' && is_name_start(c))
+                && !l.contains(':') =>
+        {
+            Some((p, l))
+        }
         _ => None,
     }
 }

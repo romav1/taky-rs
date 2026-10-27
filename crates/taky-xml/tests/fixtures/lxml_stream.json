@@ -15545,6 +15545,262 @@
    "error_at": null
   },
   {
+   "id": "fuzz_ns_uri_brace",
+   "source": "case",
+   "chunks_b64": [
+    "PGV2ZW50PjxkZXRhaWw+PHggeG1sbnM9InVybjphfWIiIGs9InYiLz48cDp5IHhtbG5zOnA9InVybjpjfWQiIHA6ej0iMSIvPjwvZGV0YWlsPjwvZXZlbnQ+"
+   ],
+   "events": [
+    [
+     {
+      "tag": "event",
+      "attrs": [],
+      "text": null,
+      "tail": null,
+      "children": [
+       {
+        "tag": "detail",
+        "attrs": [],
+        "text": null,
+        "tail": null,
+        "children": [
+         {
+          "tag": "{urn:a}b}x",
+          "attrs": [
+           [
+            "k",
+            "v"
+           ]
+          ],
+          "text": null,
+          "tail": null,
+          "children": []
+         },
+         {
+          "tag": "{urn:c}d}y",
+          "attrs": [
+           [
+            "{urn:c}d}z",
+            "1"
+           ]
+          ],
+          "text": null,
+          "tail": null,
+          "children": []
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   ],
+   "error_at": null
+  },
+  {
+   "id": "fuzz_ns_uri_brace_inherited",
+   "source": "case",
+   "chunks_b64": [
+    "PHcgeG1sbnM6cD0idXJuOmN9ZCI+PGV2ZW50IHA6az0iMSI+PHA6eS8+PC9ldmVudD48L3c+"
+   ],
+   "events": [
+    [
+     {
+      "tag": "event",
+      "attrs": [
+       [
+        "{urn:c}d}k",
+        "1"
+       ]
+      ],
+      "text": null,
+      "tail": null,
+      "children": [
+       {
+        "tag": "{urn:c}d}y",
+        "attrs": [],
+        "text": null,
+        "tail": null,
+        "children": []
+       }
+      ]
+     }
+    ]
+   ],
+   "error_at": null
+  },
+  {
+   "id": "fuzz_inherited_invalid_prefix",
+   "source": "case",
+   "chunks_b64": [
+    "PHdyYXAgeG1sbnM6OXg9InVybjp5Ij48ZXZlbnQgdWlkPSJVIi8+PC93cmFwPg=="
+   ],
+   "events": [
+    [
+     {
+      "tag": "event",
+      "attrs": [
+       [
+        "uid",
+        "U"
+       ]
+      ],
+      "text": null,
+      "tail": null,
+      "children": []
+     }
+    ]
+   ],
+   "error_at": null
+  },
+  {
+   "id": "fuzz_detail_invalid_prefix",
+   "source": "case",
+   "chunks_b64": [
+    "PGV2ZW50PjxkZXRhaWw+PGMgYT0iMSIgeG1sbnM6MDA9InUiIGI9IjIiLz48ZCB4bWxuczpwPSJ2IiB4bWxuczo5eD0idyIgcDprPSIxIi8+PC9kZXRhaWw+PC9ldmVudD4="
+   ],
+   "events": [
+    [
+     {
+      "tag": "event",
+      "attrs": [],
+      "text": null,
+      "tail": null,
+      "children": [
+       {
+        "tag": "detail",
+        "attrs": [],
+        "text": null,
+        "tail": null,
+        "children": [
+         {
+          "tag": "c",
+          "attrs": [
+           [
+            "a",
+            "1"
+           ],
+           [
+            "xmlns:00",
+            "u"
+           ],
+           [
+            "b",
+            "2"
+           ]
+          ],
+          "text": null,
+          "tail": null,
+          "children": []
+         },
+         {
+          "tag": "d",
+          "attrs": [
+           [
+            "xmlns:9x",
+            "w"
+           ],
+           [
+            "{v}k",
+            "1"
+           ]
+          ],
+          "text": null,
+          "tail": null,
+          "children": []
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   ],
+   "error_at": null
+  },
+  {
+   "id": "fuzz_dup_malformed_attr",
+   "source": "case",
+   "chunks_b64": [
+    "PHggdTowcz0iMSIgdTowcz0iMiIvPjxldmVudC8+"
+   ],
+   "events": [],
+   "error_at": 0
+  },
+  {
+   "id": "fuzz_dup_valid_undeclared_attr",
+   "source": "case",
+   "chunks_b64": [
+    "PHggdTpzPSIxIiB1OnM9IjIiLz48ZXZlbnQvPg=="
+   ],
+   "events": [
+    [
+     {
+      "tag": "event",
+      "attrs": [],
+      "text": null,
+      "tail": null,
+      "children": []
+     }
+    ]
+   ],
+   "error_at": null
+  },
+  {
+   "id": "fuzz_dup_invalid_xmlns",
+   "source": "case",
+   "chunks_b64": [
+    "PGV2ZW50IHhtbG5zOjl4PSJhIiB4bWxuczo5eD0iYiIvPg=="
+   ],
+   "events": [],
+   "error_at": 0
+  },
+  {
+   "id": "fuzz_malformed_local",
+   "source": "case",
+   "chunks_b64": [
+    "PGV2ZW50IHhtbG5zOmE9InUiPjxhOjBiIGE6MGM9IjEiLz48dyB4bWxucz0iZCI+PGE6LWIvPjwvdz48L2V2ZW50Pg=="
+   ],
+   "events": [
+    [
+     {
+      "tag": "event",
+      "attrs": [],
+      "text": null,
+      "tail": null,
+      "children": [
+       {
+        "tag": "a:0b",
+        "attrs": [
+         [
+          "a:0c",
+          "1"
+         ]
+        ],
+        "text": null,
+        "tail": null,
+        "children": []
+       },
+       {
+        "tag": "{d}w",
+        "attrs": [],
+        "text": null,
+        "tail": null,
+        "children": [
+         {
+          "tag": "{d}a:-b",
+          "attrs": [],
+          "text": null,
+          "tail": null,
+          "children": []
+         }
+        ]
+       }
+      ]
+     }
+    ]
+   ],
+   "error_at": null
+  },
+  {
    "id": "quirk_unknown_entity_restart",
    "source": "case",
    "chunks_b64": [
@@ -15787,6 +16043,16 @@
   {
    "id": "qname_empty_prefix_elem",
    "input_b64": "PGV2ZW50Pjw6eC8+PC9ldmVudD4=",
+   "ok": null
+  },
+  {
+   "id": "qname_invalid_ncname_prefix_decl",
+   "input_b64": "PGV2ZW50IHhtbG5zOjl4PSd1Jy8+",
+   "ok": null
+  },
+  {
+   "id": "qname_invalid_ncname_local",
+   "input_b64": "PGV2ZW50IGE6MHM9JzEnLz4=",
    "ok": null
   },
   {

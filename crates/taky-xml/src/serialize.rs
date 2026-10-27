@@ -292,8 +292,12 @@ fn node_tail(n: &Node) -> Option<&String> {
 }
 
 /// `{uri}local` → `(uri, local)`.
+///
+/// Split at the **last** `}`: a namespace URI may contain `}`, a local name (an NCName) cannot
+/// (S-407a, fuzzing F-1). Clark names here are internal: libxml2 keeps URI and local name
+/// apart, so the serialized bytes match lxml even where lxml's own `get("{a}b}c")` fails.
 pub(crate) fn split_clark(name: &str) -> Option<(&str, &str)> {
-    name.strip_prefix('{')?.split_once('}')
+    name.strip_prefix('{')?.rsplit_once('}')
 }
 
 /// A namespace binding with the depth of the element that declares it.

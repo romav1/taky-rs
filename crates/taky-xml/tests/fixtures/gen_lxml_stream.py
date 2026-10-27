@@ -83,6 +83,16 @@ CASES = {
     "qname_dup_xmlns_colon": ['<event xmlns:="u" xmlns:="v"/>'],
     "qname_malformed_default_ns": ['<event><w xmlns="d" a:="1"><:x/><a:/><b:c:d/></w></event>'],
     "qname_malformed_event_tags": ['<a:b:event/><:event/><event:/><event a="1"/>'],
+    # fuzzing regressions (S-407a): `}` in a namespace URI (F-1); a local part that is not an
+    # NCName (`xmlns:9x`, `u:0s`) is a raw unprefixed name, `xmlns:9x` no declaration (F-2)
+    "fuzz_ns_uri_brace": ['<event><detail><x xmlns="urn:a}b" k="v"/><p:y xmlns:p="urn:c}d" p:z="1"/></detail></event>'],
+    "fuzz_ns_uri_brace_inherited": ['<w xmlns:p="urn:c}d"><event p:k="1"><p:y/></event></w>'],
+    "fuzz_inherited_invalid_prefix": ['<wrap xmlns:9x="urn:y"><event uid="U"/></wrap>'],
+    "fuzz_detail_invalid_prefix": ['<event><detail><c a="1" xmlns:00="u" b="2"/><d xmlns:p="v" xmlns:9x="w" p:k="1"/></detail></event>'],
+    "fuzz_dup_malformed_attr": ['<x u:0s="1" u:0s="2"/><event/>'],
+    "fuzz_dup_valid_undeclared_attr": ['<x u:s="1" u:s="2"/><event/>'],
+    "fuzz_dup_invalid_xmlns": ['<event xmlns:9x="a" xmlns:9x="b"/>'],
+    "fuzz_malformed_local": ['<event xmlns:a="u"><a:0b a:0c="1"/><w xmlns="d"><a:-b/></w></event>'],
     # known divergences (listed in tests/lxml_oracle.rs DIVERGENCES, Rust outcome in tests/stream.rs)
     "quirk_unknown_entity_restart": ["<event a='1'>&foo;</event><event a='2'/>", "<event a='3'/>", "<event a='4'/>"],
     "quirk_bare_amp_zombie": ["<event>&</event>", "<event a='1'/>"],
@@ -112,6 +122,8 @@ DOC_CASES = {
     "qname_two_colons": "<event a:b:c='1'/>",
     "qname_xmlns_colon": "<event xmlns:='u'/>",
     "qname_empty_prefix_elem": "<event><:x/></event>",
+    "qname_invalid_ncname_prefix_decl": "<event xmlns:9x='u'/>",
+    "qname_invalid_ncname_local": "<event a:0s='1'/>",
     "eol_refs": "<e a='1\r\n2&#10;'>a\r\nb&#13;&amp;&lt;</e>",
 }
 

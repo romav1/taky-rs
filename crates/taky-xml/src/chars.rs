@@ -10,7 +10,8 @@ pub(crate) fn is_space(b: u8) -> bool {
     matches!(b, b' ' | b'\t' | b'\r' | b'\n')
 }
 
-fn is_name_start(c: char) -> bool {
+/// `NameStartChar`.
+pub(crate) fn is_name_start(c: char) -> bool {
     matches!(c,
         ':' | 'A'..='Z' | '_' | 'a'..='z'
         | '\u{C0}'..='\u{D6}' | '\u{D8}'..='\u{F6}' | '\u{F8}'..='\u{2FF}'
