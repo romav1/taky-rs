@@ -4,7 +4,7 @@ This guide covers a production install of taky-rs: where files live, how to run 
 systemd as a non-root user, ports, Redis, the Data Package Server, TLS and client
 certificates, banning users, and notes for the Raspberry Pi. For a ten-minute walkthrough
 see [QUICKSTART.md](QUICKSTART.md). Moving an existing Python taky server over is covered in
-`MIGRATION.md`.
+[MIGRATION.md](MIGRATION.md).
 
 ## Contents
 
