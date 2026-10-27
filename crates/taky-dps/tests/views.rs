@@ -166,6 +166,29 @@ async fn vcm_namespaces_tail_comments_and_form_body() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn vcm_namespace_uri_with_brace() {
+    // S-410 / D-30: Rust accepts a namespace URI containing `}` (Python: 400 Malformed XML); the
+    // declaration copied onto the detached feed for a prefixed attribute must keep the whole URI.
+    let mut h = Harness::new(&cfg()).await;
+    let r = h
+        .send(
+            post(
+                "<videoConnections xmlns:p=\"urn:c}d\"><feed p:a=\"1\"><uid>B1</uid></feed></videoConnections>",
+                vec![],
+            ),
+            ALICE,
+            None,
+        )
+        .await;
+    assert_eq!(r.status, 200);
+    assert_eq!(
+        std::fs::read_to_string(h.upload_path.join("video_feed").join("B1.xml")).unwrap(),
+        "<?xml version='1.0' encoding='ASCII'?>\n<feed xmlns:p=\"urn:c}d\" p:a=\"1\"><uid>B1</uid></feed>"
+    );
+    h.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn vcm_without_upload_path_is_sever_error() {
     let mut h = Harness::new(&cfg()).await;
     std::fs::remove_dir_all(&h.upload_path).unwrap();

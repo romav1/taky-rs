@@ -23,7 +23,7 @@ use crate::models::{Event, Frame};
 pub enum Persistence {
     /// In-process map (`taky.redis` disabled).
     Memory(MemoryPersistence),
-    /// Redis (`SET key frame EX ttl`, `SCAN` + `GET`).
+    /// Redis (`SETEX key ttl frame`, `SCAN` + `GET`).
     Redis(RedisPersistence),
 }
 
@@ -225,7 +225,7 @@ pub fn redis_key_space(hostname: &str) -> String {
 /// `RedisPersistence` (spec §9.4, byte-compatible with Python taky on the same DB):
 /// * key `taky:{hostname}:persist:{uid}` (uid verbatim, no escaping);
 /// * value = the wire frame, i.e. `etree.tostring(event.as_element)` bytes, no declaration;
-/// * `SET key value EX ttl` (D-4; same resulting state as Python's `SET` + `EXPIRE`),
+/// * `SETEX key ttl value` (D-4; same resulting state as Python's `SET` + `EXPIRE`),
 ///   ttl = `persist_ttl` against the injected clock;
 /// * read: `SCAN MATCH taky:{hostname}:persist:*` (D-5) + `GET`, parsed as one document;
 ///   a value that fails to parse/unmarshal, or a non-connection error (e.g. `WRONGTYPE`) ⇒
@@ -373,7 +373,7 @@ impl RedisPersistence {
         }
     }
 
-    /// `track_event`: `SET key frame EX ttl` (`ttl > 0`, checked by the caller).
+    /// `track_event`: `SETEX key ttl frame` (`ttl > 0`, checked by the caller).
     async fn track_event(&mut self, evt: &Arc<Event>, frame: &Frame, ttl: i64) {
         let uid = evt.uid.as_deref().unwrap_or_default();
         pylog!(LGR, Level::DEBUG, "Tracking {uid} (ttl: {ttl})");

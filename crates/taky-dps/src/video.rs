@@ -80,8 +80,10 @@ fn detach_with_ns(feed: &Element, root: &Element) -> Element {
     e
 }
 
+/// URI of a Clark name `{uri}local`, split at the last `}` (a namespace URI may contain `}`,
+/// an NCName local part cannot; same rule as `taky_xml::serialize::split_clark`, S-410).
 fn clark_uri(name: &str) -> Option<&str> {
-    name.strip_prefix('{')?.split_once('}').map(|(u, _)| u)
+    name.strip_prefix('{')?.rsplit_once('}').map(|(u, _)| u)
 }
 
 /// POST `/Marti/vcm` (`marti_video_upload`).
@@ -203,4 +205,21 @@ fn feed_index(dir: &Path) -> Response {
         serialize(&doc, &ser_decl()),
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clark_uri_splits_at_last_brace() {
+        // S-410: a namespace URI may contain `}` (D-30: Rust accepts `urn:c}d`); local names
+        // cannot, so the Clark name `{uri}local` is split at the last `}` (as taky_xml).
+        assert_eq!(clark_uri("{urn:c}d}a"), Some("urn:c}d"));
+        assert_eq!(clark_uri("{}}x"), Some("}"));
+        assert_eq!(clark_uri("{urn:p}a"), Some("urn:p"));
+        assert_eq!(clark_uri("{}a"), Some(""));
+        assert_eq!(clark_uri("a"), None);
+        assert_eq!(clark_uri("{urn:p"), None);
+    }
 }
