@@ -1,0 +1,16 @@
+[package]
+name = "taky-fuzz-decoder-dump"
+version = "0.0.0"
+publish = false
+edition = "2024"
+license = "MIT"
+description = "decoder-dump (qa01, S-407, test-strategy §4.2): JSON-lines {chunks_b64} -> {events, error} for difftest fuzzdiff. Test-only."
+
+[[bin]]
+name = "decoder-dump"
+path = "src/main.rs"
+
+[dependencies]
+taky-fuzz-common = { path = "../common" }
+serde_json = { version = "1", features = ["preserve_order"] }
+base64 = "0.22"

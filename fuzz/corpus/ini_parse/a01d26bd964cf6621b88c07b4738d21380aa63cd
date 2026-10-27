@@ -1,0 +1,7 @@
+[ssl]
+enabled = yes
+ca = s6sl/ca.cr
+cert_db = ./xt
+s
+[taky]
+root_dir = .

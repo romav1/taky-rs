@@ -1,0 +1,13 @@
+[package]
+name = "taky-fuzz-common"
+version = "0.0.0"
+publish = false
+edition = "2024"
+license = "MIT"
+description = "Shared helpers of the taky-rs fuzz targets and decoder-dump (qa01, S-407). Test-only."
+
+[dependencies]
+taky-xml = { path = "../../crates/taky-xml" }
+taky-cot = { path = "../../crates/taky-cot" }
+bytes = "1.12"
+tokio-util = { version = "0.7", features = ["codec"] }

@@ -1,0 +1,21 @@
+<event version="2.0" uid="EB77220E-6299-4CA3-95FC-02000Z" ale="2023-01-12T09:55:31.(00Z">
+    <point lat="54.3380.0" le="0.0"/>
+    <detail>
+        <act callsign="poop"/>
+        <precisionlocation geopointsrc="???" altrc="???"/>
+        <status readiness="true"/>
+        <archive/>
+        <link uid="5874F828-5CF1-4289-B6C0-D4F6ABFB0B4D" production_time="2023-005-iOS" relation="p-p"/>
+        <usericon iconsetpath="COT_MAPPING_2525B/a-u/a-u-G"/>
+   gn="poop"/>
+ "      <precisionlocation geopointsrc="???" altsrc="???"/>
+        <status readiness="true"/>
+        <archive/>
+        <link uid="1874F828-5CF1-005-iOS" relation="p-p"/>
+        <usericon iconsetpath="COT_MAPPING_2525B/a-u/a-u-G"/>
+        <color argb="-1"/>
+     2     <color argb="-1"/>
+     2  <marti/>
+        <remarks/>
+    </detail>
+</event>

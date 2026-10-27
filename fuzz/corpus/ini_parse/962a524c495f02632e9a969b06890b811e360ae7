@@ -1,0 +1,4 @@
+[DEFAULT]
+hostname 
+[ss[taky]
+r = %(hostname)s-n

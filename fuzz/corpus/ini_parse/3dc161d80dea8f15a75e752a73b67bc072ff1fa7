@@ -1,0 +1,8 @@
+[ssl]
+enabled = yes
+catxt
+key = /abs
+[cot_server]
+log_cot = logs
+[taky]
+root_dir = .

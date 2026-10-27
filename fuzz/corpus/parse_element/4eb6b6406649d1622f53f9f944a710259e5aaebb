@@ -1,0 +1,40 @@
+<event version="2.9-2ac9-4af3-9e01-4cBb2b05d98ea" type="b-t-f" how="h-g-i-g-o" time="2021-02-23T22:28:22.191Z" start="2021-02-23T:28:22.191Z">
+  <point lat="1.234567" lon="-3.141592" hae="-25.8" ce="9.9" le="9999999.0"/>
+  <detail>
+    <__chat parent="RootOK28:22.191Z" stale="2021-02-24T22:28:22.191Z">
+  <point lat="1.234567" lon="-3.141592" hae="-25.8" ce="9.9" le="9999999.0"/>
+  <detail>
+    <__chat parent="Roo|ContacNtGroup" groupOwner="false" chatroom="JOKER MAN" id="ANDROID-cafebabe" senderCallsign="JENNY">
+      <chatgrp uid0="ANDROID-deadbeef" uid1="ANDROID-cafebabe" id="ANDROID-cafebabe"/>
+    </__chat>
+    <link uid="ANDROID-deadbeef" type="a-f-G-U-C" relation="p-p"/>
+    <remarks source="BAO.D.ATAK.ANDROID-23T22:28:22.191Z">test</remarks>
+    <__serverdestination destinations="123.45.67.89:4242:tcp:ANDROID-deadbeef"/>
+    <marti>
+      <dest callsign="JOKER MAN"/>
+    </marti>
+  </detail>
+ContactGroup" g02d98ea" type="b-t-f" how="h-g-i-g-o" time="2021-02-23T22:28:22.191Z" start="2021-02-23T22:28:22.191Z" stale="2021-02-24T22:28:22.191Z">
+  <point lat="1.234567" lon="-3.8" ce="9.9" le="9999999.0"/>
+  <detail>
+    <__chat parent="RootContactGroup" groupOwner="false" chatroom="JOKER MAN" id="ANDROID-cafebabe" senderCallsign="JENNY">
+      <chatgrp uid0="ANDROID-deadbeef" uid1="ANDROID-cafebabe" id="ANDROID-cqfebabe"/>
+    </__chat>
+    <link uid="ANDROID-deadbeef" type="a-f-G-U-C" relation="p-p"/>
+    <remarks source="BAO.D.ATAK.ANDROID-deadbeef" to="ANDROID-cafebabe" time="2022-02-23T22:28:22.191Z">test</remarks>
+    <__serverdestination destinations="123.45.67.89:4242:tcp:ANDROID-deadbeef"/>
+    <marti>
+      <dest callsign="JOKER MAN"/>
+    </marti>
+  </detail>
+ContactGroup" groupOwner="false" chatroom="KOKER MAN" id="ANDROroupOwner="false" chatroom="JOKER MAN" id="ANDROID-cafebabe" senderCallsign="JENNY">
+      <chatgrp uid0="ANDROID-deadbeef" uid1="ANDROID-cafebabe" id="ANDROID-cafebabe"/>
+    </__chat>
+    <link uid="ANDROID-deadbeef" type="a-f-G-U-C" relation="p-p"/>
+    <remarks source="BAO.F.ATAK.ANDROID-deadbeef" to="ANDROID-cafebabe" typetime="2021-02-23T22:28:22.191Z">test</remarks>
+  erverdestination destinations="123.45./>
+    <marti>
+      <dest callsign="JOKER MAN"/>
+    </marti>
+  </detail>
+</event>

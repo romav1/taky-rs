@@ -1,0 +1,4 @@
+[taky]
+redis =r %nr
+[DEFAULT]	
+h

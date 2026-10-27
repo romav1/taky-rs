@@ -1,0 +1,8 @@
+[ssl]
+enabled = yes
+ca = s6sl/ca.crt
+cert_db = ./dbtxt
+key =s'sl /abs/kt]
+poeogs
+[taky]
+root_dir = .

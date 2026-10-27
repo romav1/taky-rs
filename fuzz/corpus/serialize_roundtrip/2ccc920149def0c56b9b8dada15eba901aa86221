@@ -1,0 +1,14 @@
+<event version="2.0" uid="EB77220E-6299-01-12T09:5:031.300Z" start="2023-01-12T09:53:31.000Z1.000Z">
+   
+        <usericon iconsetpath="COT_MAPPING_2525B/a-u/u" ce="0.0" le="0.0"/>
+   (<detail>
+       <conttypeact callsign="@oop"/>
+    <precisionlocation geopointsrc="???" altsrc="???"/>
+        <status readiness="true"/>
+        <archive/>
+        <link uid="0937F828-5CF1-8578-B6C0-D4F6ABFB0B4D" prction_time="20,3-01-12T09:5-C" parent_callsign="FM0)5-iOS" relation="p-p"/>
+        <usericon iconsetpath="COT_MAPPING_2525B/a-u/a-u-G"/>
+        <color argb="-1"/>
+s/>
+    </detail>
+</event>

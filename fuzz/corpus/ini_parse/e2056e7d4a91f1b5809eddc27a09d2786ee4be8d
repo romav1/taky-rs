@@ -1,0 +1,5 @@
+[ssl]
+enabled = yes
+(
+key = %(hostname)s
+hostname =n %(hostname)s

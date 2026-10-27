@@ -1,0 +1,5 @@
+[ssl]
+hostname=%(hostname)sn
+/= %(p)sot
+
+.4

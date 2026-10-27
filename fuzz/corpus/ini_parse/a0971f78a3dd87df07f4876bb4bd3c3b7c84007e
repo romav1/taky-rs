@@ -1,0 +1,2 @@
+[DEFAULT]sl
+hostname= %(hostname)s/

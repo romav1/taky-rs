@@ -1,0 +1,7 @@
+[ssl]
+ena:bled = yes
+ca= ssl/ca.crt
+cert_db = ./db.txt
+key = /abs/k
+[cot_
+lo

@@ -1,0 +1,4 @@
+[taky]
+hostname = rv
+node_id = %(hostname)s
+n

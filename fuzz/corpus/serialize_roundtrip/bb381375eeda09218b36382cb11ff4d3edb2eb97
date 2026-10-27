@@ -1,0 +1,1 @@
+<event version="2.RW-1" type="a-u-G" how="h-e" time="2030-01-01T03:00:00.000Z" start="2030-01-01T00:00:00.123Z" stale="2030-01-01T00:10:00.000Z"><point lat="1.234568" lon="2.000000" hae="3.1" ce="4.0" le="5.0"/><detail><contact callsign="X"/><remarks>a &amp; b &lt;c&gt;</remarks></detail></event>

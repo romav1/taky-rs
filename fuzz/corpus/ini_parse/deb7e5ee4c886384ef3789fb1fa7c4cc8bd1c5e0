@@ -1,0 +1,3 @@
+[taky]
+bind_ip
+node_id= %(bind_ip)s

@@ -8,6 +8,7 @@ difftest — differential test harness Python taky <-> taky-rs (qa01, T-11; test
     tools/difftest/difftest --target py --only V04,D01   # subset by id prefix
     tools/difftest/difftest --target py shared/spec/vectors/cot/V001.json ...
     tools/difftest/difftest random --sessions 1000 --seed 1   # seeded random sessions (randsession.py)
+    tools/difftest/difftest fuzzdiff [--corpus DIR]   # CotDecoder vs lxml XMLPullParser+XMLDeclStrip on the fuzz corpus (fuzzdiff.py)
     tools/difftest/difftest compat C1 [--mode alternate|simultaneous|both]   # data compatibility C1..C14 (compat.py, compat2.py)
 
 For every selected vector the baseline (Python) and the target are each started as LIVE processes
@@ -25,6 +26,13 @@ import shutil
 import sys
 import time
 import traceback
+
+if __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "fuzzdiff":
+    # decoder vs lxml oracle on the fuzz corpus (S-407); dispatched before the vector-runner imports
+    # (it needs neither an01's runner modules nor the bench).
+    from harness import fuzzdiff
+
+    sys.exit(fuzzdiff.main(sys.argv[2:]))
 
 from . import bench, compare
 from .cot import CotRun

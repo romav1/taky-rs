@@ -1,0 +1,4 @@
+[t]
+bind_ip
+d =!%
+bip=%(bind_ip)s

@@ -1,0 +1,107 @@
+# cargo-fuzz workspace for taky-rs (qa01, S-407; test-strategy §1.6, L6).
+# A separate workspace: NOT a member of ../Cargo.toml (members = crates/*), NOT run by scripts/check.sh.
+#
+#   cd taky-rs/fuzz
+#   RUSTC_BOOTSTRAP=1 cargo fuzz run cot_decoder_stream corpus/cot_decoder_stream -- \
+#       -rss_limit_mb=256 -malloc_limit_mb=64 -timeout=1 -max_total_time=600
+#   cargo build --release -p taky-fuzz-decoder-dump      # `decoder-dump` for `difftest fuzzdiff`
+#
+# Corpora: corpus/<target>/ (seed + minimized libFuzzer corpus), corpus/regressions/<target>/ (minimized
+# repros of every crash/timeout/fuzzdiff mismatch; replayed by `tools/fuzz/replay.sh`).
+# Input framing of the stream targets: see common/src/lib.rs (`split_chunks`), mirrored in
+# tools/difftest/harness/fuzzdiff.py.
+
+[workspace]
+members = [".", "common", "decoder-dump"]
+resolver = "3"
+
+[package]
+name = "taky-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+license = "MIT"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+taky-fuzz-common = { path = "common" }
+taky-xml = { path = "../crates/taky-xml" }
+taky-cot = { path = "../crates/taky-cot" }
+taky-config = { path = "../crates/taky-config" }
+taky-common = { path = "../crates/taky-common" }
+taky-dps = { path = "../crates/taky-dps" }
+taky-server = { path = "../crates/taky-server" }
+bytes = "1.12"
+tokio = { version = "1.53", features = ["rt", "io-util", "time", "macros"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision"] }
+tempfile = "3"
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "cot_decoder_stream"
+path = "fuzz_targets/cot_decoder_stream.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "parse_element"
+path = "fuzz_targets/parse_element.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "serialize_roundtrip"
+path = "fuzz_targets/serialize_roundtrip.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "ini_parse"
+path = "fuzz_targets/ini_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "isoparse"
+path = "fuzz_targets/isoparse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "py_float"
+path = "fuzz_targets/py_float.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "mgmt_frame"
+path = "fuzz_targets/mgmt_frame.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "secure_filename"
+path = "fuzz_targets/secure_filename.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dps_multipart"
+path = "fuzz_targets/dps_multipart.rs"
+test = false
+doc = false
+bench = false

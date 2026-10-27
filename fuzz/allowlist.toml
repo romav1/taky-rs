@@ -1,0 +1,54 @@
+# fuzzdiff allowlist (qa01, S-407; test-strategy §1.6). Each [[entry]] = one permitted class of
+# divergence between taky-rs CotDecoder (decoder-dump) and the lxml oracle, with its reference.
+# Matching (all given keys must hold): classes ⊇ the divergence classes of the input; input_regex on
+# the concatenated stream (latin-1); rust_error_regex / python_error_regex on the error texts;
+# python_no_error = the oracle stream did not raise. Anything not matched is a defect.
+# requires = classes that must be present; clean_before = trigger regexes (or "@badutf8"): the stream cut
+# just before the earliest trigger must show no divergence (both sides agree up to the construct).
+# Classes: error-flag:{rust,python}-only, event-count, elm-bytes, evt-kind:A->B, frame-bytes,
+# late-error (equal once the probe chunk is appended), python-zombie (libxml2 silently stopped parsing).
+
+[[entry]]
+id = "LATE-ERROR"
+ref = "OQ-S407-A (pending an01, MSG-20261027-qa01-14); compat-matrix 1.1.3 'as in libxml2'"
+reason = """libxml2's push parser reports some errors only when the next bytes arrive (`<!x`, a trailing invalid
+UTF-8/control byte, an unterminated name); the Rust decoder reports them on the read that contains them.
+With one more read (the probe chunk) both sides are identical: same events, both disconnect."""
+classes = ["late-error"]
+
+[[entry]]
+id = "D-23-ENTITY"
+ref = "D-23 (ADR-002 rev. 3, OQ-05; V017, V054-V056)"
+reason = """Unknown named entity / malformed reference (`&foo;`, bare `&`, `&#65` without `;`): libxml2 drops the
+rest of the recv chunk, restarts as a bare document ("Extra content" / "Start tag expected" on later input)
+or goes silent forever (zombie); Rust drops only the enclosing event and continues, or disconnects
+"XML Syntax Error" on a malformed reference. Both sides must agree on the stream up to the first `&`."""
+clean_before = ['&(?!(?:lt|gt|amp|quot|apos|#[0-9]+|#x[0-9a-fA-F]+);)']
+
+[[entry]]
+id = "CTRL-ZOMBIE"
+ref = "OQ-S407-B (pending an01, MSG-20261027-qa01-14); same mechanism as the D-23 zombie"
+reason = """A NUL / C0 control character or invalid UTF-8 in markup (PI, comment, start tag, CDATA), or a `<!` that
+is neither a comment nor CDATA (`<!DOCT…` with an open quote, `<!?xml`), makes libxml2 stop parsing silently or
+wait for a `>` that never comes: no error, no further events, the connection stays open but is dead
+(python-zombie). Rust disconnects with "XML Syntax Error" (DTD / invalid markup declaration / invalid char).
+Both agree up to the first such construct."""
+requires = ["python-zombie"]
+clean_before = ['[\x00-\x08\x0b\x0c\x0e-\x1f]', "@badutf8", '<!(?!--|\[CDATA\[)']
+
+[[entry]]
+id = "CTRL-SKIP"
+ref = "OQ-S407-B (pending an01, MSG-20261027-qa01-14)"
+reason = """A NUL byte (C string end in libxml2's input handling) or other C0 control / invalid UTF-8 byte in a tag
+makes libxml2 skip the rest of that chunk and keep parsing the next one; Rust disconnects at once.
+Real clients never send these bytes; the Rust behaviour is the safe one. Both agree up to the first such byte."""
+classes = ["error-flag:rust-only", "event-count"]
+clean_before = ['[\x00-\x08\x0b\x0c\x0e-\x1f]', "@badutf8"]
+
+[[entry]]
+id = "D-2-LIMITS"
+ref = "D-2 (ADR-002 limits: element 4 MiB, depth 256, attributes 256, name 1 KiB, 100 000 nodes)"
+reason = """taky-rs limits (approved deviation): exceeding one is a stream error = disconnect; libxml2 accepts larger
+names/attribute counts (and leaks). Only Rust-side errors whose text is a limit violation."""
+classes = ["error-flag:rust-only", "event-count", "python-zombie"]
+rust_error_regex = "limit exceeded"

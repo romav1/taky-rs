@@ -1,0 +1,10 @@
+[ssenky]
+ndib_ip
+bin=d%(bind_ip)s
+ 
+c[t = %(bind_ip)s
+ 
+cyndi
+bind_ip = %(bind_ip)s
+ 
+cthos

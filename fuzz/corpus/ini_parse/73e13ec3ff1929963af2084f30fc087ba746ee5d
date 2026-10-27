@@ -1,0 +1,6 @@
+[ssl]
+enabled = yes
+rt
+cert_db =././aogs
+[taky]
+root_dir = .

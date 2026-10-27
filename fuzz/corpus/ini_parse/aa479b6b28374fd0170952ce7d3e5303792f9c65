@@ -1,0 +1,3 @@
+[taky]1
+hostname=
+node_id= %(hostname)s-

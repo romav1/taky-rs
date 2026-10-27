@@ -1,0 +1,5 @@
+[ssl]
+enabled = on
+[cot_server]
+moi
+mon_port =1

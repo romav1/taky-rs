@@ -1,0 +1,3 @@
+[ssl]
+enabled = yes
+ca=s/2

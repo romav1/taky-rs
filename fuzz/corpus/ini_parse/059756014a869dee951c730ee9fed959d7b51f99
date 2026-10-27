@@ -1,0 +1,9 @@
+[ssl]
+enabled = yes
+ca = ssl/ca.crt
+cert_db = ./db.txt
+key = /abs/k
+[cot_ser]
+log= yes
+ca = ssl/ca.crt
+cert_ = .

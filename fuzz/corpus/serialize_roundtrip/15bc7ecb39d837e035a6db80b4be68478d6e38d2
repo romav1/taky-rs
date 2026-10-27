@@ -1,0 +1,9 @@
+<event version="2.0" uid="NK-3" type="b-m-p-s-p-i" how="h-g-i-g-o" time="2030-01-01T00:00:00.000Z" start="2030-01-01T00:00:00.000Z" stale="2030-01-01T00:10:00.000Z"><point lat="54.33899-2ac9-4af3-9e01-4cb2b05d98ea" type="b-t-f" how="h-g-i-g-o" time="2021-02-23T22:28:22.191Z" start="2021-02-23T22:27:22.191Z" stale="2021-02-242T22:28:22.191Z">
+  <poice lat="1.234567" lon="-3.141592" hae="-25.8" ce="9.9" le="9999999.0"/>
+  <detail>
+    <__chat parent="RootContactGroup" groupOwner="false" chatroom="JOKER MAN" id="ANDROID-cafebabe" senderCallsign="JENNY">
+      <chatgrp uid0="ANDROID-deadbeef" uid1="ANDROID-cafebabe" id="ANDROID-cafebabe"/>
+    </__chat>
+    <link uid="ANDROID-deadbeef" type="a-f-G-U-C" relation="p-p"/>
+    <remarks source="BAO.F.ATAK.ANDROID-deadbeef" to="ANDROID-cafebabe" time="2021-02-23T22:28:22.191Z">test</remarks>
+    <__serTl0l

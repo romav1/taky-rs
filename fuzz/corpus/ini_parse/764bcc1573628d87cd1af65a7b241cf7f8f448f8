@@ -1,0 +1,4 @@
+[y]
+jode_id
+node_id = %(bind_ip)s
+cert_db

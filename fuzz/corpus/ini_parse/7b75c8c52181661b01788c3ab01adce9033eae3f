@@ -1,0 +1,7 @@
+[ssl]
+enabled = yes
+xt
+key= s /
+[cot_server]
+&o
+log_cot= l/

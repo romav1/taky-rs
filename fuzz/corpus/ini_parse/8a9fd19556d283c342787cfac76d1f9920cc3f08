@@ -1,0 +1,3 @@
+[s]
+hostname=%s
+bs1=%(hostname)s

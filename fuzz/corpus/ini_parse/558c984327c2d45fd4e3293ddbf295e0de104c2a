@@ -1,0 +1,2 @@
+[taky]
+redis = redis://localhost:6379/1

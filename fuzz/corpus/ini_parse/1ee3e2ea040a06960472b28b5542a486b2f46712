@@ -1,0 +1,4 @@
+[ssl]
+enabled =yes
+ca =t
+key=

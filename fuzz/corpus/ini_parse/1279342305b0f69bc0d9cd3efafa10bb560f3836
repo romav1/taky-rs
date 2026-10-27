@@ -1,0 +1,4 @@
+[DEFAULT]
+d = %(bind_ip)s
+
+bind_ip:

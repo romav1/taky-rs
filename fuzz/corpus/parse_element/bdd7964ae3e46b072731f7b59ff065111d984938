@@ -1,0 +1,11 @@
+<event version="2.0" uid="GeoChat.1-43T22:28:22.191Z" start="20223T22:28:22.191Z" stale="2021-02-24T22:28:22.191Z">
+nt lat="" lon="-3.14159le="9999999.0"/>
+  <detail>
+    <__chat parent="RootContactGroup" groupOwner="false" chatroom="JOKER MAN" id="ANDROID-cafebabe" senderCallsign="JENNY">
+      <chatgrp uid0="ANDROID-deadbeef" uid1="ANDROID-cafebabe" id="ANDROID-cafebabe"/>
+    </__chat>
+    <link uid="ANDROID-deadbeef" type="a-f-G-U-C" relation="p-p"/>
+    <remarks source="BAO.F.ATAK.ANDROID-deadbeef" to="ANDROID-cafebabe" time="2021-02-23T22:28:22.191Z">test</remarks>
+    <__serverdestination destinations="122.45.67.89:4AN" id="ANDROID-cafebabe" senderCallsign="JENNY">
+      <chatgrp uid0="ANDROID-deadbeef" uid1="ANDROID-cafebabe" id=etail>
+<>
