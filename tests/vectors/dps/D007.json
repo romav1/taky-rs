@@ -5,7 +5,7 @@
   "source_refs": [
     "taky/taky/dps/views/datapackage.py:56"
   ],
-  "notes": "",
+  "notes": "results come in os.listdir order (filesystem-dependent in Python and Rust alike) => expect.unordered: compared as a multiset.",
   "config": {
     "taky": {
       "hostname": "taky.example",
@@ -60,6 +60,9 @@
       "expect": {
         "status": 200,
         "content_type": "application/json",
+        "unordered": [
+          "results"
+        ],
         "body_json": {
           "resultCount": 2,
           "results": [

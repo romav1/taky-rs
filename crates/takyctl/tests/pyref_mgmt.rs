@@ -346,6 +346,10 @@ fn ident(s: &str) -> String {
 
 #[test]
 fn kickban_rs_py_cross() {
+    if !taky_root().join("taky/cli/__main__.py").exists() {
+        eprintln!("SKIP pyref_mgmt: taky/ (original) not available");
+        return;
+    }
     let Some(python) = find_python() else {
         eprintln!("SKIP: no Python with cryptography+lxml");
         return;
@@ -466,6 +470,10 @@ fn wait_status(site: &Path, pred: impl Fn(&Value) -> bool) -> Value {
 
 #[test]
 fn status_rs_py_cross() {
+    if !taky_root().join("taky/cli/__main__.py").exists() {
+        eprintln!("SKIP pyref_mgmt: taky/ (original) not available");
+        return;
+    }
     let Some(python) = find_python() else {
         eprintln!("SKIP: no Python with cryptography+lxml");
         return;
@@ -551,6 +559,10 @@ fn status_rs_py_cross() {
 
 #[test]
 fn errors_without_server() {
+    if !taky_root().join("taky/cli/__main__.py").exists() {
+        eprintln!("SKIP pyref_mgmt: taky/ (original) not available");
+        return;
+    }
     let Some(python) = find_python() else {
         eprintln!("SKIP: no Python with cryptography+lxml");
         return;

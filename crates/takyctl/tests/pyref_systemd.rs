@@ -51,6 +51,13 @@ struct Env {
 
 impl Env {
     fn new() -> Option<Env> {
+        if !manifest()
+            .join("../../../taky/taky/cli/__main__.py")
+            .exists()
+        {
+            eprintln!("SKIP pyref_systemd: taky/ (original) not available");
+            return None;
+        }
         let python = find_python()?;
         let o = Command::new(&python)
             .args(["-I", "-c", "import sys; print(sys.prefix)"])

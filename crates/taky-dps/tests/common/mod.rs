@@ -697,8 +697,23 @@ fn check(ctx: &str, exp: &Value, r: &HttpResponse, upload_path: &str) {
         // `$VERSION` placeholder as in `body` (the version string has no JSON-special chars).
         let raw =
             String::from_utf8_lossy(&r.body).replace(&taky_dps::version_string(), "taky-$VERSION");
-        let got = norm_json(&serde_json::from_str(&raw).expect("json body"));
-        assert_eq!(&got, j, "{ctx}: body_json");
+        let mut got = norm_json(&serde_json::from_str(&raw).expect("json body"));
+        let mut want = j.clone();
+        // `expect.unordered`: top-level body keys whose arrays come in `listdir` order (search),
+        // which depends on the filesystem in Python and Rust alike ⇒ compared as multisets.
+        for k in exp["unordered"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+        {
+            for v in [&mut got, &mut want] {
+                if let Some(Value::Array(a)) = v.get_mut(k) {
+                    a.sort_by_key(Value::to_string);
+                }
+            }
+        }
+        assert_eq!(got, want, "{ctx}: body_json");
         assert!(r.body.ends_with(b"\n"), "{ctx}: jsonify trailing newline");
     }
     if exp.get("body_is_framework_page").and_then(Value::as_bool) == Some(true) {

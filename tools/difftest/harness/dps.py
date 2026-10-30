@@ -26,6 +26,18 @@ from .targets import local_non_loopback_ip
 
 import run_python_dps as rpd  # an01: norm_json, norm_text, snapshot_files
 
+def sort_unordered(body, keys):
+    """`expect.unordered`: top-level body keys whose arrays come in listdir order (search), which is
+    filesystem-dependent in Python and Rust alike => compared as multisets (sorted canonical JSON)."""
+    if not isinstance(body, dict):
+        return body
+    out = dict(body)
+    for k in keys:
+        if isinstance(out.get(k), list):
+            out[k] = sorted(out[k], key=lambda x: json.dumps(x, sort_keys=True))
+    return out
+
+
 VERSION_RE = re.compile(r"taky-(?:unknown|rs-\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)")
 
 
@@ -129,6 +141,8 @@ class DpsRun:
                 obs["body_is_framework_page"] = True
         if "body_json" in obs:
             obs["body_json"] = json.loads(norm_version(json.dumps(obs["body_json"])))
+            keys = set(step.get("expect", {}).get("unordered", [])) | set(step.get("rust_expect", {}).get("unordered", []))
+            obs["body_json"] = sort_unordered(obs["body_json"], keys)
         names = sorted(set(step.get("expect", {}).get("headers", {})) | set(step.get("record_headers", [])))
         if names:
             obs["headers"] = {h: resp.getheader(h) for h in names}

@@ -18,6 +18,8 @@ import json
 
 import run_python as rp  # an01: Runner.check, c14n, unsubst, persist_equal
 
+from .dps import sort_unordered
+
 
 def rust_view(vec):
     """The vector as a Rust runner sees it: rust_expect replaces expect (format 2)."""
@@ -85,6 +87,10 @@ def oracle_dps(vec, obs, target_name):
         exp = step.get("expect", {})
         rq = step["request"]
         for k, val in exp.items():
+            if k == "unordered":
+                continue
+            if k == "body_json":
+                val = sort_unordered(val, exp.get("unordered", []))
             if k == "body_is_framework_page":
                 if bool(o.get(k)) != bool(val):
                     errs.append(f"{v['id']} step {idx} {rq['method']} {rq['path']}: framework page expected {val}")
