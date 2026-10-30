@@ -5,6 +5,9 @@
 # (fuzz-stats-<target>) — sum `stat::number_of_executed_units` / run time over the runs for the G-3 report.
 # A crash/timeout/OOM fails the job and uploads the reproducer (fuzz-crash-<target>): minimize it, commit it to
 # fuzz/corpus/regressions/<target>/ and send a bug message to the crate owner.
+# FUZZ_TARGET is explicit: without --target cargo-fuzz builds for the triple it was itself compiled for, and the
+# prebuilt cargo-fuzz from taiki-e/install-action is a musl binary ⇒ x86_64-unknown-linux-musl, whose std is not in
+# the minimal nightly profile ("can't find crate for `core`"). Do not drop it when bumping cargo-fuzz.
 # The lxml differential (`tools/difftest/difftest fuzzdiff`) needs the Python original and runs in the office bench.
 name: fuzz
 
@@ -27,6 +30,7 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_FUZZ_VERSION: "0.13.2"
+  FUZZ_TARGET: x86_64-unknown-linux-gnu
 
 jobs:
   fuzz:
@@ -67,12 +71,12 @@ jobs:
           restore-keys: fuzz-corpus-${{ matrix.target }}-
       - name: Build
         working-directory: fuzz
-        run: cargo fuzz build -O -s none ${{ matrix.target }}
+        run: cargo fuzz build -O -s none --target "$FUZZ_TARGET" ${{ matrix.target }}
       - name: Replay regressions
         working-directory: fuzz
         run: |
           if [ -d "corpus/regressions/${{ matrix.target }}" ]; then
-            cargo fuzz run -O -s none ${{ matrix.target }} corpus/regressions/${{ matrix.target }} -- \
+            cargo fuzz run -O -s none --target "$FUZZ_TARGET" ${{ matrix.target }} corpus/regressions/${{ matrix.target }} -- \
               -runs=0 -rss_limit_mb=256 -malloc_limit_mb=64 -timeout=1 -close_fd_mask=1
           fi
       - name: Fuzz
@@ -81,7 +85,7 @@ jobs:
           SECONDS_PER_TARGET: ${{ github.event.inputs.seconds || '3600' }}
         run: |
           mkdir -p artifacts/${{ matrix.target }}
-          cargo fuzz run -O -s none ${{ matrix.target }} corpus/${{ matrix.target }} -- \
+          cargo fuzz run -O -s none --target "$FUZZ_TARGET" ${{ matrix.target }} corpus/${{ matrix.target }} -- \
             -rss_limit_mb=256 -malloc_limit_mb=64 -timeout=1 -close_fd_mask=1 \
             -max_total_time="$SECONDS_PER_TARGET" -print_final_stats=1 \
             -artifact_prefix=artifacts/${{ matrix.target }}/ 2>&1 | tee artifacts/${{ matrix.target }}.log | grep -E "INITED|DONE|ERROR|SUMMARY|stat::"
@@ -91,7 +95,7 @@ jobs:
         working-directory: fuzz
         run: |
           mkdir -p corpus/.min
-          cargo fuzz run -O -s none ${{ matrix.target }} corpus/.min corpus/${{ matrix.target }} -- \
+          cargo fuzz run -O -s none --target "$FUZZ_TARGET" ${{ matrix.target }} corpus/.min corpus/${{ matrix.target }} -- \
             -merge=1 -rss_limit_mb=256 -malloc_limit_mb=64 -timeout=1 -close_fd_mask=1 >/dev/null 2>&1
           rm -rf corpus/${{ matrix.target }} && mv corpus/.min corpus/${{ matrix.target }}
           echo "corpus: $(ls corpus/${{ matrix.target }} | wc -l) files" | tee -a artifacts/${{ matrix.target }}.log
