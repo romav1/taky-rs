@@ -7,11 +7,12 @@
 //!   `taky-server` `conn::read_half` (one `decode` loop per received chunk) and records what the
 //!   server would see: every emitted element (`tostring(elm, with_tail=False)`), the outcome of
 //!   `Event::from_element` ⇒ `to_frame`, and whether the stream failed.
+//! * [`parser_input`] — the bytes the stream parser sees after `<?xml ` stripping.
 //! * [`check_stream_invariants`] — the in-target invariants of §1.6.
 
 use bytes::BytesMut;
 use taky_cot::{CotDecoder, Event};
-use taky_xml::{Element, Node, SerOpts, serialize};
+use taky_xml::{Element, Node, SerOpts, XmlDeclStrip, serialize};
 use tokio_util::codec::Decoder;
 
 /// Split a fuzz input into socket chunks. `mode = data[0] & 3`:
@@ -191,12 +192,28 @@ fn count(hay: &[u8], needle: &[u8]) -> usize {
     hay.windows(needle.len()).filter(|w| *w == needle).count()
 }
 
+/// The bytes the stream parser actually sees: `chunks` fed one by one through a fresh
+/// [`XmlDeclStrip`], exactly as `TreeBuilder::feed` does per `decode` call (see [`run_stream`]).
+/// A tail held back by the stripper at the end of the stream is not included: it never reaches
+/// the parser until more data arrives, so it cannot have produced an event.
+pub fn parser_input(chunks: &[&[u8]]) -> Vec<u8> {
+    let mut strip = XmlDeclStrip::new();
+    let mut out = Vec::new();
+    for c in chunks {
+        strip.strip(c, &mut out);
+    }
+    out
+}
+
 /// §1.6 invariants on top of "no panic": the number of emitted events is at most the number of
-/// `</event` + `/>` in the input; an emitted element starts with `<event`; a frame is a closed
-/// `<event …>` and re-parses when it has only ASCII names and no `:` at all.
+/// `</event` + `/>` in the *parser input* ([`parser_input`]: the chunks after `<?xml ` stripping,
+/// not the raw bytes — stripping a declaration can join `</eve` + `nt>` into `</event>`, or swallow
+/// a closer inside a declaration; the original `XMLDeclStrip` does the same, S-509); an emitted
+/// element starts with `<event`; a frame is a closed `<event …>` and re-parses when it has only
+/// ASCII names and no `:` at all.
 pub fn check_stream_invariants(chunks: &[&[u8]], dump: &StreamDump) {
-    let all: Vec<u8> = chunks.concat();
-    let closers = count(&all, b"</event") + count(&all, b"/>");
+    let seen = parser_input(chunks);
+    let closers = count(&seen, b"</event") + count(&seen, b"/>");
     assert!(
         dump.events.len() <= closers,
         "{} events from {} closing tags",

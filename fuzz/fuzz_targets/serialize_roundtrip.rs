@@ -1,6 +1,13 @@
 //! `serialize_roundtrip` (S-407, §1.6): parse ⇒ serialize ⇒ parse: the trees are equal (tag,
-//! attributes, text, tail, children; namespace bookkeeping ignored) and serialization is
-//! idempotent (`serialize(parse(serialize(e))) == serialize(e)`), for the plain and the pretty form.
+//! attributes, text, tail, children; empty text and no text are the same; namespace bookkeeping
+//! ignored) and serialization reaches a fixpoint after one roundtrip: with `e2 = parse(s1)`,
+//! `s2 = serialize(e2)`, `e3 = parse(s2)` the tree `e3` equals `e2` and `serialize(e3) == s2`.
+//! Plain form (`with_tail = false`) only; the pretty form is not exercised.
+//!
+//! `s1 == s2` is NOT an invariant (S-509): an empty CDATA section gives text `Some("")`, which is
+//! written as `<event></event>`; re-parsed, that has text `None` and is written as `<event/>`.
+//! lxml does the same (`<event><![CDATA[]]></event>` ⇒ `<event></event>` ⇒ `<event/>`) — parity
+//! with the original. From the first re-parse on, the text is canonical and the output is stable.
 #![no_main]
 use libfuzzer_sys::fuzz_target;
 use taky_xml::{Element, Limits, Node, SerOpts, parse_element, serialize};
@@ -78,6 +85,19 @@ fuzz_target!(|data: &[u8]| {
         same(&e1, &e2, true),
         "tree changed by a roundtrip:\n{e1:?}\n{e2:?}"
     );
+    // Fixpoint from the second serialization (s1 may differ: '' vs None text, see the header).
     let s2 = serialize(&e2, &plain);
-    assert_eq!(s1, s2, "serialization is not idempotent");
+    let e3 = match parse_element(&s2, &lim) {
+        Ok(e) => e,
+        Err(err) => panic!(
+            "second serialization does not re-parse: {err}: {}",
+            String::from_utf8_lossy(&s2)
+        ),
+    };
+    assert!(
+        same(&e2, &e3, true),
+        "tree changed by the second roundtrip:\n{e2:?}\n{e3:?}"
+    );
+    let s3 = serialize(&e3, &plain);
+    assert_eq!(s2, s3, "serialization does not reach a fixpoint");
 });
