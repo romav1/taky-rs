@@ -8,9 +8,18 @@ use std::sync::OnceLock;
 use libfuzzer_sys::fuzz_target;
 use taky_config::{Ini, load_config_in};
 
+/// Scratch directory for the config file written on every run. Prefer tmpfs (`/dev/shm`): a
+/// disk-backed temp dir makes each run do real file I/O, and a stall of the CI runner's disk
+/// turned into a false libFuzzer timeout (S-510). Falls back to the default temp dir.
 fn dir() -> &'static tempfile::TempDir {
     static D: OnceLock<tempfile::TempDir> = OnceLock::new();
-    D.get_or_init(|| tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}")))
+    D.get_or_init(|| {
+        tempfile::Builder::new()
+            .prefix("taky-fuzz-ini")
+            .tempdir_in("/dev/shm")
+            .or_else(|_| tempfile::tempdir())
+            .unwrap_or_else(|e| panic!("tempdir: {e}"))
+    })
 }
 
 fuzz_target!(|data: &[u8]| {
