@@ -5,9 +5,9 @@
 //! `PATH`, so `scripts/check.sh` stays green without Redis. Set `TAKY_REQUIRE_REDIS=1` to turn a
 //! missing binary into a failure (CI does). Install: `apt-get install redis-server` (any 6.2+).
 //!
-//! Python cross-compat (T-33 pre-check, see `dev01/handoff/S-309.md`): `xcompat_*` run only when
-//! `TAKY_XCOMPAT_REDIS_URL` is set, and are driven by a script that writes/reads the same DB
-//! with Python taky's `RedisPersistence`.
+//! Python cross-compat (T-33 pre-check, see `dev01/handoff/S-309.md`): `xcompat_*` are
+//! `#[ignore = "xcompat harness"]` entry points for a script that writes/reads the same DB with
+//! Python taky's `RedisPersistence`; run with `--ignored` and the `TAKY_XCOMPAT_*` env.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::net::TcpListener;
@@ -462,22 +462,24 @@ async fn from_config_backend_selection() {
     assert_eq!(redis_key_space("h"), "taky:h:persist");
 }
 
-// ---- Python cross-compat (driven externally; no-ops unless TAKY_XCOMPAT_REDIS_URL is set) ----
+// ---- Python cross-compat: harness entry points, #[ignore]d; run by a driver that sets the env:
+// TAKY_XCOMPAT_REDIS_URL=… TAKY_XCOMPAT_HOST=… TAKY_XCOMPAT_NOW=… TAKY_XCOMPAT_IN=… (writes) /
+// TAKY_XCOMPAT_OUT=… (reads) cargo test -p taky-cot --test redis_live -- --ignored xcompat_rust_
+// A missing variable fails the test (no silent no-op). ----
 
-fn xcompat_url() -> Option<String> {
-    std::env::var("TAKY_XCOMPAT_REDIS_URL").ok()
+fn xcompat_env(name: &str) -> String {
+    std::env::var(name).unwrap_or_else(|_| panic!("{name} not set (xcompat harness entry point)"))
 }
 
 /// Rust tracks every event of `$TAKY_XCOMPAT_IN` (one XML event per line) into keyspace
 /// `taky:$TAKY_XCOMPAT_HOST:persist`, with the clock at `$TAKY_XCOMPAT_NOW`.
 #[tokio::test]
+#[ignore = "xcompat harness"]
 async fn xcompat_rust_writes() {
-    let Some(url) = xcompat_url() else { return };
-    let Ok(input) = std::env::var("TAKY_XCOMPAT_IN") else {
-        return;
-    };
-    let host = std::env::var("TAKY_XCOMPAT_HOST").unwrap();
-    let clock = FakeClock::new(t(&std::env::var("TAKY_XCOMPAT_NOW").unwrap()));
+    let url = xcompat_env("TAKY_XCOMPAT_REDIS_URL");
+    let input = xcompat_env("TAKY_XCOMPAT_IN");
+    let host = xcompat_env("TAKY_XCOMPAT_HOST");
+    let clock = FakeClock::new(t(&xcompat_env("TAKY_XCOMPAT_NOW")));
     let mut router = redis_router(&url, &host, -1, &clock).await;
     // Straight into `Persistence::track` (Python side calls `track` directly too): routing
     // decisions (marti ⇒ not broadcast ⇒ not kept) are covered by the router tests.
@@ -492,13 +494,12 @@ async fn xcompat_rust_writes() {
 /// Rust reads keyspace `taky:$TAKY_XCOMPAT_HOST:persist` and writes the replayed frames
 /// (sorted, one per line) to `$TAKY_XCOMPAT_OUT`.
 #[tokio::test]
+#[ignore = "xcompat harness"]
 async fn xcompat_rust_reads() {
-    let Some(url) = xcompat_url() else { return };
-    let Ok(out_path) = std::env::var("TAKY_XCOMPAT_OUT") else {
-        return;
-    };
-    let host = std::env::var("TAKY_XCOMPAT_HOST").unwrap();
-    let clock = FakeClock::new(t(&std::env::var("TAKY_XCOMPAT_NOW").unwrap()));
+    let url = xcompat_env("TAKY_XCOMPAT_REDIS_URL");
+    let out_path = xcompat_env("TAKY_XCOMPAT_OUT");
+    let host = xcompat_env("TAKY_XCOMPAT_HOST");
+    let clock = FakeClock::new(t(&xcompat_env("TAKY_XCOMPAT_NOW")));
     let mut router = redis_router(&url, &host, -1, &clock).await;
     let (b, out) = connect(&mut router, 1);
     router.send_persist(b).await;
