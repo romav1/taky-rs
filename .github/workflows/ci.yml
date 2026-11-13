@@ -61,7 +61,11 @@ jobs:
   # report-only for now (no fail), capped at 20 min.
   quality:
     name: quality (ub-mode ratchet, mutants on PRs)
+    # Pull requests and pushes to the default branch only: a PR branch push would otherwise run
+    # it twice (push + pull_request), each with a cold instrumented build (S-807 N-3).
+    if: github.event_name == 'pull_request' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
