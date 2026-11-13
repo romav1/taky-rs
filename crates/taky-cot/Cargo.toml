@@ -26,16 +26,11 @@ tracing.workspace = true
 
 [dev-dependencies]
 taky-common = { workspace = true, features = ["testkit"] }
+# Self dev-dependency: own tests always get `testkit` (plain `cargo test -p taky-cot` runs
+# router/redis_live; ub01 P0-3). Dev-deps are not unified into normal builds (resolver 3).
+taky-cot = { path = ".", features = ["testkit"] }
 serde_json.workspace = true
 tempfile.workspace = true
 
 [lints]
 workspace = true
-
-[[test]]
-name = "router"
-required-features = ["testkit"]
-
-[[test]]
-name = "redis_live"
-required-features = ["testkit"]
