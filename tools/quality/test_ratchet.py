@@ -1,5 +1,7 @@
 """Tests for ratchet.py (run: python3 -I -B -m unittest discover -s tools/quality)."""
 
+import contextlib
+import io
 import tempfile
 import unittest
 from pathlib import Path
@@ -67,7 +69,10 @@ class Parse(unittest.TestCase):
             (p / "crap.edn").write_text(CRAP_EDN)
             args = ["--baseline", str(p / "b.toml"), "--crap", str(p / "crap.edn"),
                     "--dry", str(p / "missing.edn"), "--root", d]
-            self.assertEqual(ratchet.main(args), 2)
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                self.assertEqual(ratchet.main(args), 2)
+            self.assertIn("FAIL report:", out.getvalue())
 
 
 class Compare(unittest.TestCase):
