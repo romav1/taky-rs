@@ -56,6 +56,61 @@ jobs:
         # via bash: the script is mode 100644 in the repo snapshot (2026-11-13).
         run: bash scripts/check.sh
 
+  # ub-mode quality ratchet (S-805, ub01 §5): coverage -> CRAP / duplication counts vs
+  # tools/quality/baseline.toml; fails when a count rises. Mutation testing on PRs is
+  # report-only for now (no fail), capped at 20 min.
+  quality:
+    name: quality (ub-mode ratchet, mutants on PRs)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # the PR diff for cargo mutants --in-diff
+      - name: Install Rust ${{ env.RUST_TOOLCHAIN }}
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup default "$RUST_TOOLCHAIN"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: quality
+      # Same pins as tools/quality/install.sh (which then finds them present).
+      - name: Install cargo-tarpaulin, cargo-mutants
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-tarpaulin@0.37.6,cargo-mutants@27.1.0
+      - name: Install redis-server, openssl
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq redis-server openssl
+      - name: scripts/check.sh --ub
+        env:
+          TAKY_REQUIRE_REDIS: "1"
+          TAKY_REQUIRE_OPENSSL: "1"
+        run: bash scripts/check.sh --ub
+      - name: cargo mutants --in-diff (report-only)
+        if: github.event_name == 'pull_request'
+        continue-on-error: true
+        timeout-minutes: 20
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          mkdir -p target/quality
+          git diff "origin/$BASE_REF...HEAD" > target/quality/pr.diff
+          cargo mutants --in-diff target/quality/pr.diff --timeout 60 --all-features \
+            --output target/quality
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: quality-reports
+          include-hidden-files: true # .metrics/*.edn
+          path: |
+            target/quality/crap.txt
+            target/quality/dry.txt
+            target/quality/.metrics/
+            target/quality/mutants.out/
+          if-no-files-found: warn
+          retention-days: 14
+
   build:
     name: build ${{ matrix.target }}
     runs-on: ubuntu-latest
