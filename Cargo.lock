@@ -2526,6 +2526,7 @@ dependencies = [
  "taky-config",
  "taky-cot",
  "taky-pki",
+ "taky-server",
  "tempfile",
  "thiserror",
  "tokio",
