@@ -7,6 +7,7 @@
 //! * [`pyparse`] — `float()` and the `Nd`/whitespace classes of CPython `int()`/`float()`;
 //! * [`clock`] — injectable clock [`clock::Clock`] (qa01 requirement, test-strategy §4.6);
 //! * [`shutdown`] — shutdown signal [`shutdown::Shutdown`];
+//! * [`testenv`] — test prerequisites: SKIP or, with `TAKY_REQUIRE_<KIND>=1`, fail (S-802);
 //! * `vectors` (feature `testkit`) — location of the an01 test vectors for tests.
 //!
 //! Status: T-10 scaffold. Implementation: T-20..T-22.
@@ -17,6 +18,7 @@ pub mod pyfmt;
 pub mod pyjson;
 pub mod pyparse;
 pub mod shutdown;
+pub mod testenv;
 #[cfg(feature = "testkit")]
 pub mod vectors;
 pub mod version;
