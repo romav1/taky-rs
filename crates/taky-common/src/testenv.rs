@@ -64,6 +64,7 @@ fn verdict(kind: Prereq, available: bool, env: &dyn Fn(&str) -> Option<OsString>
     }
 }
 
+#[track_caller]
 fn require_in<T>(
     kind: Prereq,
     value: Option<T>,
@@ -86,11 +87,13 @@ fn require_in<T>(
 
 /// `value` when the prerequisite is there (`Some`); otherwise skip (`None`) or panic, see the
 /// module docs. Use: `let Some(py) = require(Prereq::Pyref, find_python(), "t", "why") else { return };`
+#[track_caller]
 pub fn require<T>(kind: Prereq, value: Option<T>, test: &str, reason: &str) -> Option<T> {
     require_in(kind, value, test, reason, &|k| std::env::var_os(k))
 }
 
 /// `true` when the test should go on. Use: `if !prereq(Prereq::Openssl, have, "t", "why") { return; }`
+#[track_caller]
 #[must_use]
 pub fn prereq(kind: Prereq, available: bool, test: &str, reason: &str) -> bool {
     require(kind, available.then_some(()), test, reason).is_some()

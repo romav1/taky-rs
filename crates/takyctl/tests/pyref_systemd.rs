@@ -17,6 +17,8 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use taky_common::testenv::{Prereq, prereq, require};
+
 fn manifest() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
@@ -50,15 +52,19 @@ struct Env {
 }
 
 impl Env {
-    fn new() -> Option<Env> {
-        if !manifest()
+    fn new(test: &str) -> Option<Env> {
+        let orig = manifest()
             .join("../../../taky/taky/cli/__main__.py")
-            .exists()
-        {
-            eprintln!("SKIP pyref_systemd: taky/ (original) not available");
+            .exists();
+        if !prereq(Prereq::Pyref, orig, test, "taky/ (original) not available") {
             return None;
         }
-        let python = find_python()?;
+        let python = require(
+            Prereq::Pyref,
+            find_python(),
+            test,
+            "no Python with cryptography + lxml (tools/pyref/venv.sh)",
+        )?;
         let o = Command::new(&python)
             .args(["-I", "-c", "import sys; print(sys.prefix)"])
             .output()
@@ -215,8 +221,7 @@ fn both(
 
 #[test]
 fn site_units_match_python() {
-    let Some(env) = Env::new() else {
-        eprintln!("SKIP: no Python with cryptography+lxml");
+    let Some(env) = Env::new("pyref_systemd::site_units_match_python") else {
         return;
     };
     for (args, n_units) in [
@@ -258,8 +263,7 @@ fn site_units_match_python() {
 
 #[test]
 fn install_refusal_and_errors_match_python() {
-    let Some(env) = Env::new() else {
-        eprintln!("SKIP: no Python with cryptography+lxml");
+    let Some(env) = Env::new("pyref_systemd::install_refusal_and_errors_match_python") else {
         return;
     };
     let mask = |o: &Out| Out {

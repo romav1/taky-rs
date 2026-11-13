@@ -17,6 +17,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use taky_common::testenv::{Prereq, prereq, require};
 
 use rsa::pkcs1::DecodeRsaPrivateKey;
 use rustls_pki_types::PrivateKeyDer;
@@ -228,15 +229,29 @@ fn check_parsed(p: &pkcs12::Pfx, case: &Case, cert: &[u8], ca: &[u8], key: Optio
 
 #[test]
 fn p12_cross_import_with_python_and_openssl() {
-    if !anc_py().exists() || !have_openssl() {
-        eprintln!("SKIP pyref_p12: taky/taky/util/anc.py or openssl not available");
+    const T: &str = "pyref_p12::p12_cross_import_with_python_and_openssl";
+    if !prereq(
+        Prereq::Pyref,
+        anc_py().exists(),
+        T,
+        "taky/taky/util/anc.py not available",
+    ) {
         return;
     }
-    let Some(py) = find_python() else {
-        eprintln!(
-            "SKIP pyref_p12: no Python with `cryptography` (set TAKY_PYREF_PYTHON or run \
-             tools/pyref/venv.sh)"
-        );
+    if !prereq(
+        Prereq::Openssl,
+        have_openssl(),
+        T,
+        "openssl CLI not available",
+    ) {
+        return;
+    }
+    let Some(py) = require(
+        Prereq::Pyref,
+        find_python(),
+        T,
+        "no Python with `cryptography` (set TAKY_PYREF_PYTHON or run tools/pyref/venv.sh)",
+    ) else {
         return;
     };
     let tmp = tempfile::tempdir().expect("tmp");

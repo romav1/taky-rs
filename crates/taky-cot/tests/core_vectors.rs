@@ -31,6 +31,7 @@ use std::time::Duration;
 use bytes::BytesMut;
 use chrono::{NaiveDateTime, TimeDelta};
 use serde_json::Value;
+use taky_common::testenv::{Prereq, prereq};
 use taky_common::vectors::vectors_dir;
 use taky_cot::testkit::{FakeClock, TestOutbox};
 use taky_cot::{
@@ -101,10 +102,12 @@ impl RedisServer {
             .stderr(Stdio::null())
             .status()
             .is_ok_and(|s| s.success());
-        if !have {
-            if std::env::var_os("TAKY_REQUIRE_REDIS").is_some() {
-                panic!("redis-server not found and TAKY_REQUIRE_REDIS is set");
-            }
+        if !prereq(
+            Prereq::Redis,
+            have,
+            "core_vectors",
+            "redis-server not on PATH",
+        ) {
             return Err("redis-server not on PATH".into());
         }
         let port = TcpListener::bind("127.0.0.1:0")

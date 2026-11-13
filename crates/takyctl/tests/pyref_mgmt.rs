@@ -23,6 +23,7 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
+use taky_common::testenv::{Prereq, prereq, require};
 
 fn manifest() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -346,12 +347,17 @@ fn ident(s: &str) -> String {
 
 #[test]
 fn kickban_rs_py_cross() {
-    if !taky_root().join("taky/cli/__main__.py").exists() {
-        eprintln!("SKIP pyref_mgmt: taky/ (original) not available");
+    const T: &str = "pyref_mgmt::kickban_rs_py_cross";
+    let orig = taky_root().join("taky/cli/__main__.py").exists();
+    if !prereq(Prereq::Pyref, orig, T, "taky/ (original) not available") {
         return;
     }
-    let Some(python) = find_python() else {
-        eprintln!("SKIP: no Python with cryptography+lxml");
+    let Some(python) = require(
+        Prereq::Pyref,
+        find_python(),
+        T,
+        "no Python with cryptography + lxml (tools/pyref/venv.sh)",
+    ) else {
         return;
     };
     let env = Env { python };
@@ -470,12 +476,17 @@ fn wait_status(site: &Path, pred: impl Fn(&Value) -> bool) -> Value {
 
 #[test]
 fn status_rs_py_cross() {
-    if !taky_root().join("taky/cli/__main__.py").exists() {
-        eprintln!("SKIP pyref_mgmt: taky/ (original) not available");
+    const T: &str = "pyref_mgmt::status_rs_py_cross";
+    let orig = taky_root().join("taky/cli/__main__.py").exists();
+    if !prereq(Prereq::Pyref, orig, T, "taky/ (original) not available") {
         return;
     }
-    let Some(python) = find_python() else {
-        eprintln!("SKIP: no Python with cryptography+lxml");
+    let Some(python) = require(
+        Prereq::Pyref,
+        find_python(),
+        T,
+        "no Python with cryptography + lxml (tools/pyref/venv.sh)",
+    ) else {
         return;
     };
     let env = Env { python };
@@ -559,12 +570,17 @@ fn status_rs_py_cross() {
 
 #[test]
 fn errors_without_server() {
-    if !taky_root().join("taky/cli/__main__.py").exists() {
-        eprintln!("SKIP pyref_mgmt: taky/ (original) not available");
+    const T: &str = "pyref_mgmt::errors_without_server";
+    let orig = taky_root().join("taky/cli/__main__.py").exists();
+    if !prereq(Prereq::Pyref, orig, T, "taky/ (original) not available") {
         return;
     }
-    let Some(python) = find_python() else {
-        eprintln!("SKIP: no Python with cryptography+lxml");
+    let Some(python) = require(
+        Prereq::Pyref,
+        find_python(),
+        T,
+        "no Python with cryptography + lxml (tools/pyref/venv.sh)",
+    ) else {
         return;
     };
     let env = Env { python };

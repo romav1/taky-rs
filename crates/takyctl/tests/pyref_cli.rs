@@ -23,6 +23,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde_json::Value;
+use taky_common::testenv::{Prereq, prereq, require};
 use taky_pki::pkcs12;
 
 fn manifest() -> PathBuf {
@@ -426,16 +427,21 @@ fn check_ssl_site(psite: &Path, rsite: &Path) {
 
 #[test]
 fn setup_and_build_client_match_python_takyctl() {
-    if !taky_root().join("taky/cli/__main__.py").exists() {
-        eprintln!("SKIP pyref_cli: taky/ (original) not available");
+    const T: &str = "pyref_cli::setup_and_build_client_match_python_takyctl";
+    let orig = taky_root().join("taky/cli/__main__.py").exists();
+    if !prereq(Prereq::Pyref, orig, T, "taky/ (original) not available") {
         return;
     }
-    let Some(python) = find_python() else {
-        eprintln!("SKIP pyref_cli: no Python with cryptography + lxml (tools/pyref/venv.sh)");
+    let Some(python) = require(
+        Prereq::Pyref,
+        find_python(),
+        T,
+        "no Python with cryptography + lxml (tools/pyref/venv.sh)",
+    ) else {
         return;
     };
-    if Command::new("openssl").arg("version").output().is_err() {
-        eprintln!("SKIP pyref_cli: openssl not available");
+    let openssl = Command::new("openssl").arg("version").output().is_ok();
+    if !prereq(Prereq::Openssl, openssl, T, "openssl not available") {
         return;
     }
     let env = Env {

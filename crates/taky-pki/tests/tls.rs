@@ -9,6 +9,7 @@ use std::process::Command;
 
 use common::*;
 use pkcs8::der::Decode;
+use taky_common::testenv::{Prereq, prereq};
 use taky_pki::{PkiError, TlsMode, identity::identity_from_der, peer_identity, server_config};
 
 fn cfg(required: bool, mode: TlsMode) -> std::sync::Arc<rustls::ServerConfig> {
@@ -195,8 +196,12 @@ fn encrypted_legacy_pem() {
 /// Interop: keys encrypted by the real OpenSSL CLI (skipped if `openssl` is absent).
 #[test]
 fn openssl_encrypted_keys_interop() {
-    if !openssl() {
-        eprintln!("SKIP: openssl CLI not found");
+    if !prereq(
+        Prereq::Openssl,
+        openssl(),
+        "tls::openssl_encrypted_keys_interop",
+        "openssl CLI not found",
+    ) {
         return;
     }
     let p = pki();

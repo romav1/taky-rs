@@ -1,9 +1,9 @@
 //! Redis persistence against a real `redis-server` (spec §9.4, V040/V042/V043).
 //!
 //! Gating: every test spawns its own throw-away `redis-server` (random port, no persistence)
-//! and **skips with a note** when the binary is not on `PATH`, so `scripts/check.sh` stays green
-//! without Redis. Set `TAKY_REQUIRE_REDIS=1` to turn a missing binary into a failure (CI with
-//! Redis). Install: `apt-get install redis-server` (any 6.2+).
+//! and **skips with a note** (`SKIP(REDIS) …`, `taky_common::testenv`) when the binary is not on
+//! `PATH`, so `scripts/check.sh` stays green without Redis. Set `TAKY_REQUIRE_REDIS=1` to turn a
+//! missing binary into a failure (CI does). Install: `apt-get install redis-server` (any 6.2+).
 //!
 //! Python cross-compat (T-33 pre-check, see `dev01/handoff/S-309.md`): `xcompat_*` run only when
 //! `TAKY_XCOMPAT_REDIS_URL` is set, and are driven by a script that writes/reads the same DB
@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 use bytes::BytesMut;
 use chrono::{NaiveDateTime, TimeDelta};
 use serde_json::Value;
+use taky_common::testenv::{Prereq, prereq};
 use taky_common::vectors::read_vector;
 use taky_cot::limits::STREAM_LIMITS;
 use taky_cot::persist::{DEFAULT_REDIS_URL, REDIS_RETRY_INTERVAL, redis_key_space};
@@ -42,23 +43,20 @@ impl Server {
         format!("redis://127.0.0.1:{}/0", self.port)
     }
 
-    /// `None` (test skipped) when `redis-server` is unavailable.
-    fn start() -> Option<Server> {
-        Server::start_on(None)
+    /// `None` (test skipped) when `redis-server` is unavailable; panics instead with
+    /// `TAKY_REQUIRE_REDIS=1` (`taky_common::testenv`).
+    fn start(test: &str) -> Option<Server> {
+        Server::start_on(test, None)
     }
 
-    fn start_on(port: Option<u16>) -> Option<Server> {
+    fn start_on(test: &str, port: Option<u16>) -> Option<Server> {
         let have = Command::new("redis-server")
             .arg("--version")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
             .is_ok_and(|s| s.success());
-        if !have {
-            if std::env::var_os("TAKY_REQUIRE_REDIS").is_some() {
-                panic!("redis-server not found and TAKY_REQUIRE_REDIS is set");
-            }
-            eprintln!("SKIP: redis-server not on PATH (set TAKY_REQUIRE_REDIS=1 to fail)");
+        if !prereq(Prereq::Redis, have, test, "redis-server not on PATH") {
             return None;
         }
         let port = port.unwrap_or_else(|| {
@@ -193,7 +191,9 @@ fn frames(out: &TestOutbox) -> Vec<String> {
 /// `final_expect.persist`). Replay order from Redis is not normative ⇒ deliveries compared
 /// as sorted lists.
 async fn run_vector(name: &str) {
-    let Some(srv) = Server::start() else { return };
+    let Some(srv) = Server::start(name) else {
+        return;
+    };
     let v: Value = serde_json::from_str(&read_vector(&format!("cot/{name}.json"))).unwrap();
     let cfg = &v["config"];
     let hostname = cfg["taky"]["hostname"].as_str().unwrap();
@@ -295,7 +295,9 @@ async fn v043_seed_replay_purge_foreign() {
 
 #[tokio::test]
 async fn kept_rules_and_replace_on_redis() {
-    let Some(srv) = Server::start() else { return };
+    let Some(srv) = Server::start("kept_rules_and_replace_on_redis") else {
+        return;
+    };
     let clock = FakeClock::new(t("2030-01-01T00:00:00Z"));
     let mut router = redis_router(&srv.url(), "", -1, &clock).await;
     let (a, _) = connect(&mut router, 1);
@@ -355,7 +357,9 @@ async fn kept_rules_and_replace_on_redis() {
 
 #[tokio::test]
 async fn wrong_type_and_bad_event_purged_foreign_untouched() {
-    let Some(srv) = Server::start() else { return };
+    let Some(srv) = Server::start("wrong_type_and_bad_event_purged_foreign_untouched") else {
+        return;
+    };
     let mut c = srv.raw();
     let _: () = redis::cmd("RPUSH")
         .arg("taky:h:persist:LIST")
@@ -386,7 +390,9 @@ async fn wrong_type_and_bad_event_purged_foreign_untouched() {
 
 #[tokio::test]
 async fn connection_loss_latch_and_retry_interval() {
-    let Some(srv) = Server::start() else { return };
+    let Some(srv) = Server::start("connection_loss_latch_and_retry_interval") else {
+        return;
+    };
     let port = srv.port;
     let url = srv.url();
     let clock = FakeClock::new(t("2030-01-01T00:00:00Z"));
@@ -414,7 +420,7 @@ async fn connection_loss_latch_and_retry_interval() {
         "bounded by timeouts"
     );
     // Server back on the same port (empty DB); before the interval nothing is attempted.
-    let srv2 = Server::start_on(Some(port)).unwrap();
+    let srv2 = Server::start_on("connection_loss_latch_and_retry_interval", Some(port)).unwrap();
     clock.advance(REDIS_RETRY_INTERVAL - TimeDelta::seconds(1));
     feed(&mut router, a, &ev("U3")).await;
     assert!(srv2.dump().is_empty());
