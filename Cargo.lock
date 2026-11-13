@@ -2411,6 +2411,7 @@ version = "1.0.0-rc.1"
 dependencies = [
  "chrono",
  "serde_json",
+ "taky-common",
  "thiserror",
  "tokio",
  "tokio-util",

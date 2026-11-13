@@ -22,6 +22,8 @@ thiserror.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true }
+# Own unit tests (vectors guard, S-802) run with `testkit` in a plain `cargo test` (as S-801).
+taky-common = { path = ".", features = ["testkit"] }
 
 [lints]
 workspace = true

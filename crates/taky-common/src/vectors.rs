@@ -58,4 +58,24 @@ mod tests {
         let d = vectors_dir();
         assert!(d.join("unit").is_dir(), "{}", d.display());
     }
+
+    /// Guard (S-802, ub01 P0-4): a lost or truncated vector directory must fail, never look
+    /// like "all vectors pass". Minimums = the tree on 2026-11-13; raise them when vectors are
+    /// added (lowering one needs an an01 reason).
+    #[test]
+    fn vector_counts_are_not_below_the_known_minimum() {
+        let d = vectors_dir();
+        for (sub, min) in [("cot", 56), ("dps", 18), ("unit", 3)] {
+            let n = std::fs::read_dir(d.join(sub))
+                .unwrap_or_else(|e| panic!("{}/{sub}: {e}", d.display()))
+                .filter_map(Result::ok)
+                .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+                .count();
+            assert!(
+                n >= min,
+                "{}/{sub}: {n} *.json, expected >= {min}",
+                d.display()
+            );
+        }
+    }
 }
