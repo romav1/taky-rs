@@ -7,8 +7,10 @@
    test fails the gate.
 2. unclebob `crapper --use-existing-coverage crates` → functions with **CRAP ≥ 10**.
 3. unclebob `dryer --threshold 0.8 crates` → **duplicate pairs**.
-4. `ratchet.py` compares both counts with `baseline.toml`: a count that **rises fails** and
-   the new offenders are listed; a count that drops passes with a hint to lower the baseline.
+4. `ratchet.py` compares with `baseline.toml` and **fails** when a count rises, when any offender
+   is not in `[known]` (a swap — one fixed, one new — fails too), or when a `[known.crap]` score
+   rises by more than `score_tolerance` (0.5; absorbs ptrace coverage noise). A missing, empty or
+   unparsable report fails (exit 2). A count that drops passes with a hint to lower the baseline.
 
 Reports: `target/quality/{crap.txt,dry.txt,.metrics/*.edn}` (CI artifact `quality-reports`).
 
@@ -28,7 +30,7 @@ CRAP names can be off (LCOV lines no longer match); trust a full run.
 
 ```sh
 bash scripts/check.sh --ub --write-baseline     # rewrites counts + [known], keeps [exceptions]
-git diff tools/quality/baseline.toml            # only decreases expected; commit with the fix
+git diff tools/quality/baseline.toml            # only removals / lower scores expected
 ```
 
 Never raise a count to make CI green: fix the function, or add an exception (below) with a reason.

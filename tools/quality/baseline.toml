@@ -2,8 +2,11 @@
 # Lower the counts when offenders are fixed: tools/quality/ub.sh --write-baseline (see README.md).
 # crap_ge_10: functions with CRAP >= 10 (crapper, tarpaulin LCOV), [exceptions] not counted.
 # dryer_pairs: dryer --threshold 0.8 pairs (defaults --min-lines 4 --min-nodes 20).
+# Also failing: an offender not in [known]; a [known.crap] score rising by > score_tolerance
+# (absorbs ptrace coverage noise).
 crap_ge_10 = 101
 dryer_pairs = 11
+score_tolerance = 0.5
 
 # Accepted exceptions (ub01 §6): Python lookup tables written as `match`; by
 # crapper key `namespace::name`. Control-flow functions get no exemption.
@@ -14,111 +17,8 @@ crap = [
   "taky_cot::models::Teams::as_str",
 ]
 
-# Offenders at baseline time (names only; the counts above are the gate).
+# Offenders at baseline time: CRAP key = score; dryer pair keys.
 [known]
-crap = [
-  "taky-rs-difftest::handle_ctl",
-  "taky-rs-difftest::main",
-  "taky-rs-difftest::parse_args",
-  "taky-rs-difftest::run",
-  "taky-rs-unit::main",
-  "taky-rs-unit::py_repr",
-  "taky-rs-unit::run_float",
-  "taky-rs-unit::run_ini",
-  "taky-rs-unit::run_isoparse",
-  "taky-rs-unit::run_vector",
-  "taky-rs::main",
-  "taky-rs::run",
-  "taky_common::log::PyLevel::as_py_str",
-  "taky_common::pyjson::float_repr",
-  "taky_common::pyjson::write_str",
-  "taky_common::pyjson::write_value",
-  "taky_common::pyparse::py_float",
-  "taky_config::error::py_repr",
-  "taky_config::ini::Ini::interpolate_some",
-  "taky_config::ini::Ini::read_inner",
-  "taky_config::load::PyInt::parse",
-  "taky_config::load::build",
-  "taky_config::load::load_config_in",
-  "taky_config::load::py_normpath",
-  "taky_config::load::realpath",
-  "taky_cot::isoparse::parse_isodate_common",
-  "taky_cot::isoparse::parse_isodate_uncommon",
-  "taky_cot::isoparse::parse_isotime",
-  "taky_cot::isoparse::parse_tzstr",
-  "taky_cot::isoparse::py_int",
-  "taky_cot::models::Event::from_element",
-  "taky_cot::models::GeoChat::to_element",
-  "taky_cot::models::TakUser::from_element",
-  "taky_cot::models::TakUser::to_element",
-  "taky_cot::persist::RedisPersistence::get_key",
-  "taky_cot::router::Router::on_event",
-  "taky_dps-rs::main",
-  "taky_dps::app::handlers",
-  "taky_dps::app::pre_route",
-  "taky_dps::bind",
-  "taky_dps::conn::Ctx::serve_connection",
-  "taky_dps::datapackage::content",
-  "taky_dps::datapackage::metadata_tool",
-  "taky_dps::datapackage::read_form",
-  "taky_dps::datapackage::search",
-  "taky_dps::datapackage::send_file",
-  "taky_dps::datapackage::upload",
-  "taky_dps::kml::bytes_repr",
-  "taky_dps::kml::str_repr",
-  "taky_dps::mimetypes::url_scheme_and_path",
-  "taky_dps::video::feed_index",
-  "taky_dps::werkzeug::host_is_valid",
-  "taky_dps::werkzeug::is_resource_modified",
-  "taky_dps::werkzeug::parse_options_header",
-  "taky_dps::werkzeug::range_for",
-  "taky_pki::certdb::lock_within",
-  "taky_pki::certdb::open_lock",
-  "taky_pki::certgen::make_cert_with_key",
-  "taky_pki::pem::base64_decode",
-  "taky_pki::pem::key_from_block",
-  "taky_pki::pem::legacy_decrypt",
-  "taky_pki::pem::unsupported_pkcs8",
-  "taky_pki::pkcs12::Pfx::salts",
-  "taky_pki::pkcs12::parse",
-  "taky_pki::pkcs12::parse_bags",
-  "taky_pki::pkcs12::read_tlv",
-  "taky_pki::tls::server_config",
-  "taky_server::conn::read_half",
-  "taky_server::hub::Hub::handle",
-  "taky_server::hub::Hub::kickban",
-  "taky_server::mgmt::py_str_repr",
-  "taky_server::server::Listeners::bind",
-  "taky_server::server::build_srv",
-  "taky_server::server::check_socket",
-  "taky_server::server::ping_socket",
-  "taky_server::server::start_inner",
-  "taky_xml::parse::Core::next_token",
-  "taky_xml::parse::Tree::resolve",
-  "taky_xml::parse::Tree::start",
-  "taky_xml::parse::Tree::text",
-  "taky_xml::parse::Tree::token",
-  "taky_xml::serialize::Reconcile::map",
-  "taky_xml::serialize::Writer::attr_value",
-  "taky_xml::serialize::Writer::element",
-  "takyctl::cli::Command::name",
-  "takyctl::datapackage::build_pref",
-  "takyctl::kickban::kickban",
-  "takyctl::kickban::print_kickban",
-  "takyctl::main",
-  "takyctl::mgmt::hex040",
-  "takyctl::mgmt::py_type",
-  "takyctl::mgmt::report",
-  "takyctl::mgmt::request",
-  "takyctl::mgmt::resolve_socket",
-  "takyctl::run",
-  "takyctl::setup::setup",
-  "takyctl::status::Cell::of",
-  "takyctl::status::print_status",
-  "takyctl::status::status",
-  "takyctl::systemd::systemd",
-  "takyctl::systemd::systemd_with",
-]
 dryer = [
   "crates/taky-cot/src/models.rs::is_takuser <-> crates/taky-cot/src/models.rs::is_geochat",
   "crates/taky-dps/src/cli.rs::command <-> crates/taky-server/src/cli.rs::command",
@@ -132,3 +32,106 @@ dryer = [
   "crates/taky-server/src/cli.rs::try_parse_from <-> crates/takyctl/src/cli.rs::try_parse_from",
   "crates/takyctl/src/systemd.rs::cot_unit <-> crates/takyctl/src/systemd.rs::dps_unit",
 ]
+
+[known.crap]
+"taky-rs-difftest::handle_ctl" = 56.0
+"taky-rs-difftest::main" = 72.0
+"taky-rs-difftest::parse_args" = 272.0
+"taky-rs-difftest::run" = 210.0
+"taky-rs-unit::main" = 20.0
+"taky-rs-unit::py_repr" = 20.0
+"taky-rs-unit::run_float" = 12.0
+"taky-rs-unit::run_ini" = 272.0
+"taky-rs-unit::run_isoparse" = 12.0
+"taky-rs-unit::run_vector" = 132.0
+"taky-rs::main" = 42.0
+"taky-rs::run" = 272.0
+"taky_common::log::PyLevel::as_py_str" = 12.7172
+"taky_common::pyjson::float_repr" = 13.017
+"taky_common::pyjson::write_str" = 14.0
+"taky_common::pyjson::write_value" = 14.0
+"taky_common::pyparse::py_float" = 13.0
+"taky_config::error::py_repr" = 16.7099
+"taky_config::ini::Ini::interpolate_some" = 14.0184
+"taky_config::ini::Ini::read_inner" = 19.0
+"taky_config::load::PyInt::parse" = 13.0
+"taky_config::load::build" = 25.0
+"taky_config::load::load_config_in" = 43.0396
+"taky_config::load::py_normpath" = 14.0399
+"taky_config::load::realpath" = 14.0228
+"taky_cot::isoparse::parse_isodate_common" = 12.0655
+"taky_cot::isoparse::parse_isodate_uncommon" = 15.1854
+"taky_cot::isoparse::parse_isotime" = 22.0088
+"taky_cot::isoparse::parse_tzstr" = 13.3301
+"taky_cot::isoparse::py_int" = 12.0947
+"taky_cot::models::Event::from_element" = 13.0
+"taky_cot::models::GeoChat::to_element" = 12.0
+"taky_cot::models::TakUser::from_element" = 10.0
+"taky_cot::models::TakUser::to_element" = 13.0
+"taky_cot::persist::RedisPersistence::get_key" = 12.9145
+"taky_cot::router::Router::on_event" = 19.0
+"taky_dps-rs::main" = 132.0
+"taky_dps::app::handlers" = 15.0386
+"taky_dps::app::pre_route" = 13.3561
+"taky_dps::bind" = 20.0
+"taky_dps::conn::Ctx::serve_connection" = 11.7641
+"taky_dps::datapackage::content" = 12.215
+"taky_dps::datapackage::metadata_tool" = 10.0057
+"taky_dps::datapackage::read_form" = 27.0648
+"taky_dps::datapackage::search" = 12.0947
+"taky_dps::datapackage::send_file" = 11.0474
+"taky_dps::datapackage::upload" = 19.0372
+"taky_dps::kml::bytes_repr" = 11.4084
+"taky_dps::kml::str_repr" = 18.0597
+"taky_dps::mimetypes::url_scheme_and_path" = 14.0581
+"taky_dps::video::feed_index" = 12.9145
+"taky_dps::werkzeug::host_is_valid" = 16.4559
+"taky_dps::werkzeug::is_resource_modified" = 14.4349
+"taky_dps::werkzeug::parse_options_header" = 37.1427
+"taky_dps::werkzeug::range_for" = 27.3732
+"taky_pki::certdb::lock_within" = 10.8
+"taky_pki::certdb::open_lock" = 10.9331
+"taky_pki::certgen::make_cert_with_key" = 12.0352
+"taky_pki::pem::base64_decode" = 15.0114
+"taky_pki::pem::key_from_block" = 13.0
+"taky_pki::pem::legacy_decrypt" = 20.8502
+"taky_pki::pem::unsupported_pkcs8" = 17.7168
+"taky_pki::pkcs12::Pfx::salts" = 10.1372
+"taky_pki::pkcs12::parse" = 39.3607
+"taky_pki::pkcs12::parse_bags" = 27.7865
+"taky_pki::pkcs12::read_tlv" = 10.0204
+"taky_pki::tls::server_config" = 12.5898
+"taky_server::conn::read_half" = 14.5143
+"taky_server::hub::Hub::handle" = 10.0125
+"taky_server::hub::Hub::kickban" = 11.5602
+"taky_server::mgmt::py_str_repr" = 26.3032
+"taky_server::server::Listeners::bind" = 90.0
+"taky_server::server::build_srv" = 132.0
+"taky_server::server::check_socket" = 20.0
+"taky_server::server::ping_socket" = 20.0
+"taky_server::server::start_inner" = 26.8404
+"taky_xml::parse::Core::next_token" = 26.0556
+"taky_xml::parse::Tree::resolve" = 13.0
+"taky_xml::parse::Tree::start" = 57.0696
+"taky_xml::parse::Tree::text" = 13.0
+"taky_xml::parse::Tree::token" = 21.1607
+"taky_xml::serialize::Reconcile::map" = 13.889
+"taky_xml::serialize::Writer::attr_value" = 10.0
+"taky_xml::serialize::Writer::element" = 21.0
+"takyctl::cli::Command::name" = 12.7172
+"takyctl::datapackage::build_pref" = 10.0
+"takyctl::kickban::kickban" = 90.0
+"takyctl::kickban::print_kickban" = 12.7914
+"takyctl::main" = 12.0
+"takyctl::mgmt::hex040" = 12.0082
+"takyctl::mgmt::py_type" = 13.7037
+"takyctl::mgmt::report" = 15.292
+"takyctl::mgmt::request" = 13.2318
+"takyctl::mgmt::resolve_socket" = 72.0
+"takyctl::run" = 110.0
+"takyctl::setup::setup" = 177.9029
+"takyctl::status::Cell::of" = 24.4929
+"takyctl::status::print_status" = 26.3603
+"takyctl::status::status" = 110.0
+"takyctl::systemd::systemd" = 30.0
+"takyctl::systemd::systemd_with" = 164.2192
