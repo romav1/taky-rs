@@ -307,8 +307,10 @@ enum Outcome {
 }
 
 impl Runner {
-    async fn new(v: &Value, noop_ops: &'static [&'static str]) -> Result<Runner, String> {
-        let vid = v["id"].as_str().unwrap().to_string();
+    /// Starts a private `redis-server` when the vector wants Redis. `Err(Outcome::Skip)` only
+    /// when redis-server is missing and not required (`testenv`, S-802b); any other setup
+    /// error comes from [`Runner::build`] as `Err(Outcome::Fail)`.
+    async fn new(v: &Value, noop_ops: &'static [&'static str]) -> Result<Runner, Outcome> {
         let wants_redis = v["config"]["taky"]["redis"].as_str().is_some_and(|r| {
             !matches!(
                 r.to_ascii_lowercase().as_str(),
@@ -316,10 +318,23 @@ impl Runner {
             )
         });
         let redis = if wants_redis {
-            Some(RedisServer::start()?)
+            Some(RedisServer::start().map_err(Outcome::Skip)?)
         } else {
             None
         };
+        let url = redis.as_ref().map(RedisServer::url);
+        Runner::build(v, noop_ops, redis, url).await
+    }
+
+    /// The runner on an already chosen backend: `redis` (seeded from `initial_redis`) and the
+    /// `[taky] redis` URL written into the config (`None` = keep the vector's value).
+    async fn build(
+        v: &Value,
+        noop_ops: &'static [&'static str],
+        redis: Option<RedisServer>,
+        redis_url: Option<String>,
+    ) -> Result<Runner, Outcome> {
+        let vid = v["id"].as_str().unwrap().to_string();
         if let (Some(srv), Some(seed)) = (&redis, v["initial_redis"].as_object()) {
             let mut c = srv.raw();
             for (k, e) in seed {
@@ -332,15 +347,12 @@ impl Runner {
                     .unwrap();
             }
         }
-        let cfg = load_config(&ini(
-            &v["config"],
-            redis.as_ref().map(|r| r.url()).as_deref(),
-        ));
+        let cfg = load_config(&ini(&v["config"], redis_url.as_deref()));
         let t0 = t(v["now"].as_str().unwrap());
         let clock = FakeClock::new(t0);
         let persist = Persistence::from_config(&cfg, clock.shared())
             .await
-            .map_err(|e| format!("Persistence::from_config: {e}"))?;
+            .map_err(|e| Outcome::Fail(vec![format!("Persistence::from_config: {e}")]))?;
         assert_eq!(
             matches!(persist, Persistence::Redis(_)),
             redis.is_some(),
@@ -638,9 +650,14 @@ impl Runner {
 }
 
 async fn run_vector(v: &Value, noop_ops: &'static [&'static str]) -> (Outcome, Vec<String>) {
-    let mut r = match Runner::new(v, noop_ops).await {
+    drive(v, Runner::new(v, noop_ops).await).await
+}
+
+/// Replays the steps on a set-up runner; a setup error is the outcome as is.
+async fn drive(v: &Value, runner: Result<Runner, Outcome>) -> (Outcome, Vec<String>) {
+    let mut r = match runner {
         Ok(r) => r,
-        Err(e) => return (Outcome::Skip(e), Vec::new()),
+        Err(o) => return (o, Vec::new()),
     };
     for (i, s) in v["steps"].as_array().unwrap().iter().enumerate() {
         r.step(i, s).await;
@@ -810,5 +827,25 @@ async fn core_vectors_negative_controls() {
             Outcome::Skip(s) => eprintln!("SKIP negative control {what}: {s}"),
             Outcome::Pass => panic!("negative control '{what}' was not detected"),
         }
+    }
+}
+
+/// S-802b: a persistence setup error that is not "redis-server missing" must fail the vector,
+/// never count as a skip. An invalid `[taky] redis` URL makes `Persistence::from_config` fail
+/// without any redis-server, so this runs everywhere.
+#[tokio::test]
+async fn persistence_setup_error_is_a_failure_not_a_skip() {
+    let v: Value = serde_json::from_str(
+        &std::fs::read_to_string(vectors_dir().join("cot/V042.json")).unwrap(),
+    )
+    .unwrap();
+    let r = Runner::build(&v, &[], None, Some("not-a-redis-url".into())).await;
+    match drive(&v, r).await.0 {
+        Outcome::Fail(errs) => assert!(
+            errs.iter().any(|e| e.contains("Persistence::from_config")),
+            "{errs:?}"
+        ),
+        Outcome::Skip(s) => panic!("persistence setup error reported as SKIP: {s}"),
+        Outcome::Pass => panic!("invalid redis URL passed"),
     }
 }
