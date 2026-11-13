@@ -625,22 +625,6 @@ fn tlv(tag: u8, content: &[u8]) -> Vec<u8> {
     out
 }
 
-#[allow(dead_code)]
-fn tlv_copy(tag: u8, content: &[u8]) -> Vec<u8> {
-    let mut out = vec![tag];
-    let n = content.len();
-    if n < 0x80 {
-        out.push(n as u8);
-    } else {
-        let bytes = n.to_be_bytes();
-        let skip = bytes.iter().take_while(|b| **b == 0).count();
-        out.push(0x80 | (bytes.len() - skip) as u8);
-        out.extend_from_slice(&bytes[skip..]);
-    }
-    out.extend_from_slice(content);
-    out
-}
-
 fn int(v: u32) -> Vec<u8> {
     let bytes = v.to_be_bytes();
     let skip = bytes.iter().take_while(|b| **b == 0).count().min(3);
