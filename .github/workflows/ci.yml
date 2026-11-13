@@ -39,9 +39,22 @@ jobs:
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-deny
+      # Test prerequisites (S-802): with TAKY_REQUIRE_<KIND>=1 a missing tool FAILS the test
+      # instead of printing SKIP (taky_common::testenv). Redis tests spawn their own redis-server.
+      # PYREF (Python original) is not vendored -> stays optional here; see tools/pyref/README.md.
+      - name: Install redis-server, openssl
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq redis-server openssl
+          redis-server --version
+          openssl version
       # CI=true is set by GitHub Actions: check.sh fails if cargo-deny is missing (review-T-10 N-4).
       - name: scripts/check.sh
-        run: scripts/check.sh
+        env:
+          TAKY_REQUIRE_REDIS: "1"
+          TAKY_REQUIRE_OPENSSL: "1"
+        # via bash: the script is mode 100644 in the repo snapshot (2026-11-13).
+        run: bash scripts/check.sh
 
   build:
     name: build ${{ matrix.target }}
