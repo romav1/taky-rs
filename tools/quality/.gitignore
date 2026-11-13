@@ -1,0 +1,3 @@
+# venv with crapper + dryer (install.sh)
+/.state/
+__pycache__/

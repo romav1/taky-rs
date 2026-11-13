@@ -3,9 +3,18 @@
 # Runs: rustfmt check, clippy (-D warnings, all targets, all features), tests, cargo-deny.
 # If cargo-deny is not installed, that stage is skipped with a WARNING locally, but FAILS when
 # CI is set to a truthy value (GitHub Actions sets CI=true; review-T-10 N-4).
+#
+# `check.sh --ub [--write-baseline|--no-coverage-run]` runs ONLY the ub-mode quality gate instead
+# (tools/quality/ub.sh: tarpaulin -> crapper/dryer -> ratchet vs tools/quality/baseline.toml;
+# S-805). Without --ub the behaviour above is unchanged.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
+
+if [[ "${1:-}" == "--ub" ]]; then
+    shift
+    exec bash tools/quality/ub.sh "$@"
+fi
 
 step() { printf '\n==> %s\n' "$*"; }
 
