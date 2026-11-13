@@ -9,6 +9,10 @@
 # ~10 GB; removed by default because the office disk is small — the next run rebuilds it).
 set -euo pipefail
 
+# Coverage must not depend on the machine: without redis/openssl their tests would SKIP, lose
+# coverage and give false CRAP results (S-807 M-4). Override with e.g. TAKY_REQUIRE_REDIS=0.
+export TAKY_REQUIRE_REDIS="${TAKY_REQUIRE_REDIS:-1}" TAKY_REQUIRE_OPENSSL="${TAKY_REQUIRE_OPENSSL:-1}"
+
 cd "$(dirname "$0")/../.."
 root="$PWD"
 q="$root/target/quality"
@@ -43,7 +47,16 @@ if (( run_cov )); then
         --exclude-files 'crates/*/tests/*' 'fuzz/*' 2>&1 | tail -n 25
     if [[ -z "${UB_KEEP_TARPAULIN:-}" ]]; then rm -rf "$root/target/tarpaulin"; fi
 fi
-test -s "$q/target/coverage/rust/lcov.info" || { echo "ub.sh: no LCOV at $q" >&2; exit 1; }
+lcov="$q/target/coverage/rust/lcov.info"
+test -s "$lcov" || { echo "ub.sh: no LCOV at $lcov" >&2; exit 1; }
+if (( ! run_cov )); then
+    newer="$(find crates -name '*.rs' -newer "$lcov" | head -n 3)"
+    if [[ -n "$newer" ]]; then # S-807 N-5: stale coverage gives wrong CRAP names/scores
+        echo "WARNING: --no-coverage-run: LCOV is older than these sources (CRAP results may be" >&2
+        echo "WARNING: wrong; run without --no-coverage-run):" >&2
+        sed 's/^/WARNING:   /' <<<"$newer" >&2
+    fi
+fi
 
 step "crapper --use-existing-coverage crates"
 "$venv/bin/crapper" --root "$q" --use-existing-coverage "$root/crates" > "$q/crap.txt"
