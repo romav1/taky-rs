@@ -814,15 +814,17 @@ R\t2026-10-16T19:03:45\t2026-10-18T19:04:40.195511\t3674ed1632305d915641de243191
     }
 
     /// B-1: as root, the replaced data file and a new lock keep/get the cert-db owner (the
-    /// directory's for a new database). Skipped when not root (CI): the non-root path is the
-    /// plain one, covered by the other tests.
+    /// directory's for a new database). Ignored by default (CI is not root; the non-root path
+    /// is the plain one, covered by the other tests). Run as root:
+    /// `cargo test -p taky-pki --lib root_writes_keep_db_owner -- --ignored`.
     #[test]
+    #[ignore = "needs root"]
     fn root_writes_keep_db_owner() {
         use std::os::unix::fs::{PermissionsExt, chown};
-        if !nix::unistd::geteuid().is_root() {
-            eprintln!("root_writes_keep_db_owner: skipped (not root)");
-            return;
-        }
+        assert!(
+            nix::unistd::geteuid().is_root(),
+            "root_writes_keep_db_owner needs root (run as root with --ignored)"
+        );
         let dir = tempfile::tempdir().expect("tmp");
         chown(dir.path(), Some(1000), Some(1001)).expect("chown dir");
         // Existing database owned by the service user, 0600.
