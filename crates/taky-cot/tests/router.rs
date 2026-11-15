@@ -607,6 +607,26 @@ async fn slow_client_dropped_and_removed() {
     assert!(b.router.client(late).is_some() && b.out(late).closed().is_none());
 }
 
+/// S-826 R-1 (N-1): the sans-IO `send_persist` wrapper still queues through the Outbox, so a
+/// full outbox follows the slow-client policy (the server uses `persist_frames` instead).
+#[tokio::test]
+async fn send_persist_into_full_outbox_is_slow_client() {
+    let now = t("2022-01-01T00:00:00");
+    let mut b = Bench::new(-1, now);
+    let src = b.connect(1, ClientKind::Cot);
+    for uid in ["K-1", "K-2"] {
+        b.feed(src, &plain_event(uid, "a-f-G", "", now, 60)).await;
+    }
+    let late = b.connect_with(2, ClientKind::Cot, TestOutbox::bounded(1));
+    b.router.send_persist(late).await;
+    assert!(b.router.client(late).is_none());
+    assert_eq!(b.out(late).closed().as_deref(), Some(SLOW_CLIENT));
+    assert_eq!(
+        (b.router.dropped_frames(), b.router.slow_disconnects()),
+        (1, 1)
+    );
+}
+
 /// S-826 (S1-1): `persist_frames` is `send_persist` without the Outbox — the same frames in
 /// persist order, nothing queued; the own-uid filter is unchanged (a fresh connect gets its
 /// own SA, V039; skipped once identified); an unknown id gets nothing.
