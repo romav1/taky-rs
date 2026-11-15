@@ -531,6 +531,58 @@ mod tests {
         assert_eq!(writer.await.unwrap(), "broken pipe");
     }
 
+    /// A buffered writer (like the rustls session): bytes reach `flushed` only on flush.
+    #[derive(Default)]
+    struct Buffered {
+        buf: Vec<u8>,
+        flushed: Vec<u8>,
+        flushes: usize,
+    }
+
+    impl AsyncWrite for Buffered {
+        fn poll_write(
+            mut self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+            b: &[u8],
+        ) -> std::task::Poll<std::io::Result<usize>> {
+            self.buf.extend_from_slice(b);
+            std::task::Poll::Ready(Ok(b.len()))
+        }
+        fn poll_flush(
+            mut self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            let me = &mut *self;
+            me.flushed.append(&mut me.buf);
+            me.flushes += 1;
+            std::task::Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(
+            self: std::pin::Pin<&mut Self>,
+            _: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::task::Poll::Ready(Ok(()))
+        }
+    }
+
+    /// S-826 R-1 (M-1): the replay is flushed exactly once, after its last frame, when no live
+    /// frame follows (else the last kept event could sit in a TLS buffer); with live frames
+    /// queued the flush is left to the live loop.
+    #[tokio::test]
+    async fn replay_flushed_once_after_last_frame() {
+        let replay =
+            || -> Vec<Frame> { ["R1", "R2", "R3"].map(|s| Arc::from(s.as_bytes())).into() };
+        let (ob, rx) = ConnOutbox::new();
+        let mut wr = Buffered::default();
+        write_replay(&ob, replay(), &rx, &mut wr).await.unwrap();
+        assert_eq!((wr.flushed.as_slice(), wr.flushes), (&b"R1R2R3"[..], 1));
+
+        ob.try_send(frame(1)).unwrap();
+        let mut wr = Buffered::default();
+        write_replay(&ob, replay(), &rx, &mut wr).await.unwrap();
+        assert_eq!((wr.buf.as_slice(), wr.flushes), (&b"R1R2R3"[..], 0));
+    }
+
     #[test]
     fn dropped_receiver_is_closed() {
         let (ob, rx) = ConnOutbox::new();
