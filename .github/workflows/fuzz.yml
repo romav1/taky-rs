@@ -5,6 +5,8 @@
 # (fuzz-stats-<target>) — sum `stat::number_of_executed_units` / run time over the runs for the G-3 report.
 # A crash/timeout/OOM fails the job and uploads the reproducer (fuzz-crash-<target>): minimize it, commit it to
 # fuzz/corpus/regressions/<target>/ and send a bug message to the crate owner.
+# -timeout=5 (S-510): a runner I/O stall gave a false 1 s ini_parse timeout; 5 s still flags real hangs. The job log
+# keeps panics (`panicked`, `Test unit written`, +2 lines; S-509) — the full log is in fuzz-stats-<target>.
 # FUZZ_TARGET is explicit: without --target cargo-fuzz builds for the triple it was itself compiled for, and the
 # prebuilt cargo-fuzz from taiki-e/install-action is a musl binary ⇒ x86_64-unknown-linux-musl, whose std is not in
 # the minimal nightly profile ("can't find crate for `core`"). Do not drop it when bumping cargo-fuzz.
@@ -77,7 +79,7 @@ jobs:
         run: |
           if [ -d "corpus/regressions/${{ matrix.target }}" ]; then
             cargo fuzz run -O -s none --target "$FUZZ_TARGET" ${{ matrix.target }} corpus/regressions/${{ matrix.target }} -- \
-              -runs=0 -rss_limit_mb=256 -malloc_limit_mb=64 -timeout=1 -close_fd_mask=1
+              -runs=0 -rss_limit_mb=256 -malloc_limit_mb=64 -timeout=5 -close_fd_mask=1
           fi
       - name: Fuzz
         working-directory: fuzz
@@ -86,9 +88,9 @@ jobs:
         run: |
           mkdir -p artifacts/${{ matrix.target }}
           cargo fuzz run -O -s none --target "$FUZZ_TARGET" ${{ matrix.target }} corpus/${{ matrix.target }} -- \
-            -rss_limit_mb=256 -malloc_limit_mb=64 -timeout=1 -close_fd_mask=1 \
+            -rss_limit_mb=256 -malloc_limit_mb=64 -timeout=5 -close_fd_mask=1 \
             -max_total_time="$SECONDS_PER_TARGET" -print_final_stats=1 \
-            -artifact_prefix=artifacts/${{ matrix.target }}/ 2>&1 | tee artifacts/${{ matrix.target }}.log | grep -E "INITED|DONE|ERROR|SUMMARY|stat::"
+            -artifact_prefix=artifacts/${{ matrix.target }}/ 2>&1 | tee artifacts/${{ matrix.target }}.log | grep -E -A2 "INITED|DONE|ERROR|SUMMARY|stat::|panicked|Test unit written"
           exit "${PIPESTATUS[0]}"
       - name: Minimize corpus
         if: success()
@@ -96,7 +98,7 @@ jobs:
         run: |
           mkdir -p corpus/.min
           cargo fuzz run -O -s none --target "$FUZZ_TARGET" ${{ matrix.target }} corpus/.min corpus/${{ matrix.target }} -- \
-            -merge=1 -rss_limit_mb=256 -malloc_limit_mb=64 -timeout=1 -close_fd_mask=1 >/dev/null 2>&1
+            -merge=1 -rss_limit_mb=256 -malloc_limit_mb=64 -timeout=5 -close_fd_mask=1 >/dev/null 2>&1
           rm -rf corpus/${{ matrix.target }} && mv corpus/.min corpus/${{ matrix.target }}
           echo "corpus: $(ls corpus/${{ matrix.target }} | wc -l) files" | tee -a artifacts/${{ matrix.target }}.log
       - name: Save corpus
