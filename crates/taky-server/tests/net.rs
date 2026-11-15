@@ -519,6 +519,69 @@ async fn plain_two_clients_broadcast_and_persist_replay() {
     srv.run.join().await.unwrap();
 }
 
+/// A kept `a-` event `(input, routed output)` with uid `uid` and `remarks` bytes of remarks
+/// (none for 0).
+fn kept_event(uid: &str, remarks: usize) -> (String, String) {
+    let detail = match remarks {
+        0 => "</detail>".to_owned(),
+        n => format!("<remarks>{}</remarks></detail>", "r".repeat(n)),
+    };
+    let f = |s: &str| s.replace("ANDROID-A", uid).replace("</detail>", &detail);
+    (f(EVT_IN), f(EVT_OUT))
+}
+
+async fn wait_persisted(srv: &Server, n: usize) {
+    let deadline = tokio::time::Instant::now() + WAIT;
+    while srv.run.hub.persist_snapshot().await.len() < n && tokio::time::Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+}
+
+/// S-826 (S1-1): `n` kept events with `remarks` bytes each are replayed to a new client in
+/// persist order although they exceed the live outbox limits; then a live event follows.
+async fn replay_then_live(n: usize, remarks: usize) {
+    let p = pki(&[], &[]);
+    let srv = serve(config(&p, false, &Value::Null), now()).await;
+    let mut src = Client::connect(srv.run.local_addr, None).await;
+    let (mut sent, mut want) = (String::new(), String::new());
+    for i in 0..n {
+        let (evt_in, evt_out) = kept_event(&format!("K-{i}"), remarks);
+        sent.push_str(&evt_in);
+        want.push_str(&evt_out);
+    }
+    src.send(sent.as_bytes()).await;
+    wait_persisted(&srv, n).await;
+
+    let late = Client::connect(srv.run.local_addr, None).await;
+    let got = read_exact(&late, want.len()).await;
+    assert!(
+        got == want.as_bytes(),
+        "replay: got {} of {} bytes, eof {}",
+        got.len(),
+        want.len(),
+        late.eof()
+    );
+    let (live_in, live_out) = kept_event("LIVE", 0);
+    src.send(live_in.as_bytes()).await;
+    want.push_str(&live_out);
+    assert!(read_exact(&late, want.len()).await == want.as_bytes() && !late.eof());
+
+    srv.shutdown.trigger();
+    srv.run.join().await.unwrap();
+}
+
+/// S-826 (S1-1): more kept events than the outbox frame limit (4096).
+#[tokio::test]
+async fn replay_beyond_outbox_frame_limit() {
+    replay_then_live(taky_server::limits::OUTBOX_MAX_FRAMES + 1, 0).await;
+}
+
+/// S-826 (S1-1): three kept events just under the 4 MiB element limit (> 8 MiB outbox bytes).
+#[tokio::test]
+async fn replay_beyond_outbox_byte_limit() {
+    replay_then_live(3, taky_cot::limits::STREAM_LIMITS.max_bytes - 4096).await;
+}
+
 /// The same over TLS with client certificates (client_cert_required = true).
 #[tokio::test]
 async fn tls_two_clients_broadcast() {

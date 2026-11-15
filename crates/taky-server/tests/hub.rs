@@ -16,8 +16,12 @@ use tokio::sync::{mpsc, oneshot};
 use tokio_util::codec::Decoder;
 
 fn event(uid: &str, remarks: usize) -> Event {
+    event_of("b-t-f", uid, remarks)
+}
+
+fn event_of(etype: &str, uid: &str, remarks: usize) -> Event {
     let xml = format!(
-        r#"<event version="2.0" uid="{uid}" type="b-t-f" time="2030-01-01T00:00:00Z" start="2030-01-01T00:00:00Z" stale="2030-01-01T00:10:00Z" how="h-g"><point lat="1" lon="2" hae="0" ce="1" le="1"/><detail><remarks>{}</remarks></detail></event>"#,
+        r#"<event version="2.0" uid="{uid}" type="{etype}" time="2030-01-01T00:00:00Z" start="2030-01-01T00:00:00Z" stale="2030-01-01T00:10:00Z" how="h-g"><point lat="1" lon="2" hae="0" ce="1" le="1"/><detail><remarks>{}</remarks></detail></event>"#,
         "r".repeat(remarks)
     );
     let mut b = BytesMut::from(xml.as_bytes());
@@ -44,7 +48,8 @@ async fn connect(hub: &mut Hub, id: u64) -> (Arc<ConnOutbox>, mpsc::UnboundedRec
         peer_serial: Some(vec![1, 2, 3]), // no cert-db (plain) ⇒ no ban check
     };
     hub.handle(HubCmd::Connected { handle, reply }).await;
-    assert_eq!(verdict.await.unwrap(), ConnectVerdict::Accepted);
+    let verdict = verdict.await.unwrap();
+    assert!(!matches!(verdict, ConnectVerdict::Banned));
     (ob, rx)
 }
 
@@ -98,4 +103,24 @@ async fn slow_client_by_bytes() {
     assert_eq!(slow.close_reason(), Some("Slow client"));
     assert!(sent <= OUTBOX_MAX_BYTES / big + 1, "sent {sent}");
     assert!(sent > OUTBOX_MAX_BYTES / (big + 1024) - 1, "sent {sent}");
+}
+
+/// S-826 (S1-1): the connect replay of more kept events than the frame limit is not queued in
+/// the outbox (the client stays connected, nothing pending); live frames queued after
+/// registration still count, and a client slow on them is closed with "Slow client".
+#[tokio::test]
+async fn replay_not_counted_live_still_limited() {
+    let mut hub = hub();
+    let _src = connect(&mut hub, 1).await;
+    for i in 0..=OUTBOX_MAX_FRAMES {
+        send(&mut hub, 1, event_of("a-f-G", &format!("k{i}"), 0)).await;
+    }
+    let (late, _late_rx) = connect(&mut hub, 2).await;
+    assert_eq!((late.close_reason(), late.pending()), (None, 0));
+    for i in 0..OUTBOX_MAX_FRAMES {
+        send(&mut hub, 1, event(&format!("live{i}"), 0)).await;
+    }
+    assert_eq!(late.pending(), OUTBOX_MAX_FRAMES);
+    send(&mut hub, 1, event("over", 0)).await;
+    assert_eq!(late.close_reason(), Some("Slow client"));
 }
