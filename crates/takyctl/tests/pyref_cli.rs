@@ -15,7 +15,9 @@
 //! * cross use (R1): Rust `build_client` on a Python site and Python on a Rust site.
 //!
 //! Needs a Python with `cryptography` and `lxml` (`TAKY_PYREF_PYTHON`, else
-//! `tools/pyref/.state/venv/bin/python`, else `python3`) and `openssl`; otherwise skipped.
+//! `tools/pyref/.state/venv/bin/python`, else `python3`) and `openssl`. The cross-check is
+//! `#[ignore]`d (S-823, §8.8.1) and run with `--ignored` (tools/pyref/README.md); a missing
+//! original or Python then fails it, a missing `openssl` goes through `testenv` (OPENSSL).
 #![allow(clippy::expect_used, clippy::unwrap_used)] // test code
 
 use std::os::unix::fs::MetadataExt;
@@ -23,7 +25,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde_json::Value;
-use taky_common::testenv::{Prereq, prereq, require};
+use taky_common::testenv::{Prereq, prereq};
 use taky_pki::pkcs12;
 
 fn manifest() -> PathBuf {
@@ -426,20 +428,15 @@ fn check_ssl_site(psite: &Path, rsite: &Path) {
 }
 
 #[test]
+#[ignore = "needs the Python original (taky/)"]
 fn setup_and_build_client_match_python_takyctl() {
     const T: &str = "pyref_cli::setup_and_build_client_match_python_takyctl";
-    let orig = taky_root().join("taky/cli/__main__.py").exists();
-    if !prereq(Prereq::Pyref, orig, T, "taky/ (original) not available") {
-        return;
-    }
-    let Some(python) = require(
-        Prereq::Pyref,
-        find_python(),
-        T,
-        "no Python with cryptography + lxml (tools/pyref/venv.sh)",
-    ) else {
-        return;
-    };
+    assert!(
+        taky_root().join("taky/cli/__main__.py").exists(),
+        "{T}: taky/ (original) not available (run per tools/pyref/README.md)"
+    );
+    let python = find_python()
+        .unwrap_or_else(|| panic!("{T}: no Python with cryptography + lxml (tools/pyref/venv.sh)"));
     let openssl = Command::new("openssl").arg("version").output().is_ok();
     if !prereq(Prereq::Openssl, openssl, T, "openssl not available") {
         return;

@@ -13,7 +13,8 @@
 //!   CA certificate and localKeyId rule (via `taky_pki::pkcs12::parse`).
 //!
 //! Needs a Python with `cryptography` and `lxml` (env `TAKY_PYREF_PYTHON`, else
-//! `tools/pyref/.state/venv/bin/python`, else `python3`); otherwise skipped with a note.
+//! `tools/pyref/.state/venv/bin/python`, else `python3`). `#[ignore]`d (S-823, §8.8.1): run with
+//! `--ignored` (tools/pyref/README.md), where a missing original or Python fails the test.
 //! Python runs with `-I -B` and `TZ=UTC`.
 #![allow(clippy::expect_used, clippy::unwrap_used)] // test code
 
@@ -21,7 +22,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde_json::Value;
-use taky_common::testenv::{Prereq, prereq, require};
 use taky_pki::certgen::{self, CertAuthority, CertKind};
 use taky_pki::pkcs12;
 use takyctl::datapackage::{ClientPackage, write_zip};
@@ -198,21 +198,19 @@ fn p12_shape(der: &[u8], pw: &str, ca: &[u8]) -> String {
 }
 
 #[test]
+#[ignore = "needs the Python original (taky/)"]
 fn client_package_matches_python_build_client() {
     const T: &str = "pyref_datapackage::client_package_matches_python_build_client";
-    let orig = taky_pkg().join("cli/build_client_cmd.py").exists();
-    if !prereq(Prereq::Pyref, orig, T, "taky/taky (original) not available") {
-        return;
-    }
-    let Some(python) = require(
-        Prereq::Pyref,
-        find_python(),
-        T,
-        "no Python with `cryptography` and `lxml` (set TAKY_PYREF_PYTHON or run \
-         tools/pyref/venv.sh)",
-    ) else {
-        return;
-    };
+    assert!(
+        taky_pkg().join("cli/build_client_cmd.py").exists(),
+        "{T}: taky/taky (original) not available (run per tools/pyref/README.md)"
+    );
+    let python = find_python().unwrap_or_else(|| {
+        panic!(
+            "{T}: no Python with `cryptography` and `lxml` (set TAKY_PYREF_PYTHON or run \
+         tools/pyref/venv.sh)"
+        )
+    });
     let tmp = tempfile::tempdir().expect("tmp");
     let certs = tmp.path().join("certs");
     std::fs::create_dir_all(&certs).expect("mkdir");

@@ -5,14 +5,14 @@
 //! Python issuing on a Rust CA, key file format, and cert-db.txt lines.
 //!
 //! Needs `openssl` and a Python with `cryptography` (env `TAKY_PYREF_PYTHON`, else
-//! `tools/pyref/.state/venv/bin/python`, else `python3`); otherwise the test is skipped with a
-//! note on stderr. Python runs with `-I -B` (no `__pycache__` in `taky/`) and `TZ=UTC`.
+//! `tools/pyref/.state/venv/bin/python`, else `python3`). `#[ignore]`d (S-823, §8.8.1): run with
+//! `--ignored` (tools/pyref/README.md); a missing original or Python then fails it. Python runs with `-I -B` (no `__pycache__` in `taky/`) and `TZ=UTC`.
 #![cfg(feature = "gen")]
 #![allow(clippy::expect_used)] // test helpers outside #[test] fns
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use taky_common::testenv::{Prereq, prereq, require};
+use taky_common::testenv::{Prereq, prereq};
 
 use taky_pki::CertDb;
 use taky_pki::certgen::{self, CertAuthority, CertKind, KeyCert};
@@ -214,16 +214,13 @@ fn db_shape(text: &str) -> String {
 }
 
 #[test]
+#[ignore = "needs the Python original (taky/)"]
 fn rust_vs_python_certificates() {
     const T: &str = "pyref_x509::rust_vs_python_certificates";
-    if !prereq(
-        Prereq::Pyref,
+    assert!(
         anc_py().exists(),
-        T,
-        "taky/taky/util/anc.py not available",
-    ) {
-        return;
-    }
+        "{T}: taky/taky/util/anc.py not available (run per tools/pyref/README.md)"
+    );
     if !prereq(
         Prereq::Openssl,
         have_openssl(),
@@ -232,14 +229,11 @@ fn rust_vs_python_certificates() {
     ) {
         return;
     }
-    let Some(py) = require(
-        Prereq::Pyref,
-        find_python(),
-        T,
-        "no Python with `cryptography` (set TAKY_PYREF_PYTHON or run tools/pyref/venv.sh)",
-    ) else {
-        return;
-    };
+    let py = find_python().unwrap_or_else(|| {
+        panic!(
+            "{T}: no Python with `cryptography` (set TAKY_PYREF_PYTHON or run tools/pyref/venv.sh)"
+        )
+    });
     let tmp = tempfile::tempdir().expect("tmp");
     let (pyd, rsd) = (tmp.path().join("py"), tmp.path().join("rs"));
     std::fs::create_dir_all(&pyd).expect("mkdir");

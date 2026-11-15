@@ -17,8 +17,6 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use taky_common::testenv::{Prereq, prereq, require};
-
 fn manifest() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
@@ -52,19 +50,18 @@ struct Env {
 }
 
 impl Env {
-    fn new(test: &str) -> Option<Env> {
-        let orig = manifest()
-            .join("../../../taky/taky/cli/__main__.py")
-            .exists();
-        if !prereq(Prereq::Pyref, orig, test, "taky/ (original) not available") {
-            return None;
-        }
-        let python = require(
-            Prereq::Pyref,
-            find_python(),
-            test,
-            "no Python with cryptography + lxml (tools/pyref/venv.sh)",
-        )?;
+    /// Panics when the prerequisite is missing: the callers are `#[ignore]`d and only run with
+    /// `--ignored` (tools/pyref/README.md), where a missing original must fail, not pass.
+    fn new(test: &str) -> Env {
+        assert!(
+            manifest()
+                .join("../../../taky/taky/cli/__main__.py")
+                .exists(),
+            "{test}: taky/ (original) not available (run per tools/pyref/README.md)"
+        );
+        let python = find_python().unwrap_or_else(|| {
+            panic!("{test}: no Python with cryptography + lxml (tools/pyref/venv.sh)")
+        });
         let o = Command::new(&python)
             .args(["-I", "-c", "import sys; print(sys.prefix)"])
             .output()
@@ -77,11 +74,11 @@ impl Env {
             .unwrap()
             .to_string_lossy()
             .into_owned();
-        Some(Env {
+        Env {
             python,
             py_prefix,
             rs_bin_dir,
-        })
+        }
     }
 
     fn run(&self, rust: bool, cwd: &Path, path_env: &str, args: &[&str]) -> Out {
@@ -220,10 +217,9 @@ fn both(
 }
 
 #[test]
+#[ignore = "needs the Python original (taky/)"]
 fn site_units_match_python() {
-    let Some(env) = Env::new("pyref_systemd::site_units_match_python") else {
-        return;
-    };
+    let env = Env::new("pyref_systemd::site_units_match_python");
     for (args, n_units) in [
         (&["--no-install", "-u", "taky"][..], 3),
         (&["--no-install", "--no-dps"][..], 2),
@@ -262,10 +258,9 @@ fn site_units_match_python() {
 }
 
 #[test]
+#[ignore = "needs the Python original (taky/)"]
 fn install_refusal_and_errors_match_python() {
-    let Some(env) = Env::new("pyref_systemd::install_refusal_and_errors_match_python") else {
-        return;
-    };
+    let env = Env::new("pyref_systemd::install_refusal_and_errors_match_python");
     let mask = |o: &Out| Out {
         stdout: o.stdout.replace("taky-rs-", "taky-"),
         stderr: o.stderr.replace("taky-rs-", "taky-"),

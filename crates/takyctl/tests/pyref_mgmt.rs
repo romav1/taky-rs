@@ -12,7 +12,9 @@
 //!   parse error, a server that closes without replying / replies garbage.
 //!
 //! Needs a Python with `cryptography` and `lxml` (`TAKY_PYREF_PYTHON`, else
-//! `tools/pyref/.state/venv/bin/python`, else `python3`); otherwise skipped.
+//! `tools/pyref/.state/venv/bin/python`, else `python3`). The cross-checks are `#[ignore]`d
+//! (S-823, §8.8.1): run with `--ignored` (tools/pyref/README.md), where a missing original or
+//! Python fails them.
 #![allow(clippy::expect_used, clippy::unwrap_used)] // test code
 
 use std::io::{Read, Write};
@@ -23,7 +25,6 @@ use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
-use taky_common::testenv::{Prereq, prereq, require};
 
 fn manifest() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -346,20 +347,15 @@ fn ident(s: &str) -> String {
 }
 
 #[test]
+#[ignore = "needs the Python original (taky/)"]
 fn kickban_rs_py_cross() {
     const T: &str = "pyref_mgmt::kickban_rs_py_cross";
-    let orig = taky_root().join("taky/cli/__main__.py").exists();
-    if !prereq(Prereq::Pyref, orig, T, "taky/ (original) not available") {
-        return;
-    }
-    let Some(python) = require(
-        Prereq::Pyref,
-        find_python(),
-        T,
-        "no Python with cryptography + lxml (tools/pyref/venv.sh)",
-    ) else {
-        return;
-    };
+    assert!(
+        taky_root().join("taky/cli/__main__.py").exists(),
+        "{T}: taky/ (original) not available (run per tools/pyref/README.md)"
+    );
+    let python = find_python()
+        .unwrap_or_else(|| panic!("{T}: no Python with cryptography + lxml (tools/pyref/venv.sh)"));
     let env = Env { python };
     let tmp = tempfile::tempdir().unwrap();
     let tpl = make_site(&tmp.path().join("tpl"), true);
@@ -475,20 +471,15 @@ fn wait_status(site: &Path, pred: impl Fn(&Value) -> bool) -> Value {
 }
 
 #[test]
+#[ignore = "needs the Python original (taky/)"]
 fn status_rs_py_cross() {
     const T: &str = "pyref_mgmt::status_rs_py_cross";
-    let orig = taky_root().join("taky/cli/__main__.py").exists();
-    if !prereq(Prereq::Pyref, orig, T, "taky/ (original) not available") {
-        return;
-    }
-    let Some(python) = require(
-        Prereq::Pyref,
-        find_python(),
-        T,
-        "no Python with cryptography + lxml (tools/pyref/venv.sh)",
-    ) else {
-        return;
-    };
+    assert!(
+        taky_root().join("taky/cli/__main__.py").exists(),
+        "{T}: taky/ (original) not available (run per tools/pyref/README.md)"
+    );
+    let python = find_python()
+        .unwrap_or_else(|| panic!("{T}: no Python with cryptography + lxml (tools/pyref/venv.sh)"));
     let env = Env { python };
     let tmp = tempfile::tempdir().unwrap();
     let tpl = make_site(&tmp.path().join("tpl"), false);
@@ -569,20 +560,15 @@ fn status_rs_py_cross() {
 }
 
 #[test]
+#[ignore = "needs the Python original (taky/)"]
 fn errors_without_server() {
     const T: &str = "pyref_mgmt::errors_without_server";
-    let orig = taky_root().join("taky/cli/__main__.py").exists();
-    if !prereq(Prereq::Pyref, orig, T, "taky/ (original) not available") {
-        return;
-    }
-    let Some(python) = require(
-        Prereq::Pyref,
-        find_python(),
-        T,
-        "no Python with cryptography + lxml (tools/pyref/venv.sh)",
-    ) else {
-        return;
-    };
+    assert!(
+        taky_root().join("taky/cli/__main__.py").exists(),
+        "{T}: taky/ (original) not available (run per tools/pyref/README.md)"
+    );
+    let python = find_python()
+        .unwrap_or_else(|| panic!("{T}: no Python with cryptography + lxml (tools/pyref/venv.sh)"));
     let env = Env { python };
     let tmp = tempfile::tempdir().unwrap();
     let d = tmp.path();
