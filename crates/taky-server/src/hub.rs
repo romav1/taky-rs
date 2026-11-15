@@ -5,7 +5,9 @@
 //! Semantics (spec §3, §4.3, §4.6; ARCHITECTURE §6):
 //! * `Connected` — ban check first (TLS peer with a serial: cert-db re-read if the file changed,
 //!   D-11; status `R` ⇒ [`ConnectVerdict::Banned`], not registered, no persist), otherwise
-//!   `Router::client_connect` + `send_persist`, then [`ConnectVerdict::Accepted`]. Plain-TCP and
+//!   `Router::client_connect` + `Router::persist_frames`, then [`ConnectVerdict::Accepted`] with
+//!   the replay (written by the conn task before live frames, outside the outbox limits, S1-1;
+//!   the Hub never awaits a socket). Plain-TCP and
 //!   certificate-less clients skip the check (cert-db is a blacklist). The cert-db is also
 //!   opened in plain mode (Python always builds `CertificateDatabase()`, server.py:84) so that
 //!   mgmt `kickban` revokes there (review-3C N-1); ban-on-connect stays TLS-only.
@@ -25,7 +27,7 @@ use std::sync::atomic::Ordering;
 use chrono::{Local, NaiveDateTime, TimeZone};
 use serde_json::{Map, Value, json};
 use taky_common::{SharedClock, Shutdown, pylog};
-use taky_cot::{ClientHandle, ClientId, Event, Outbox, Router};
+use taky_cot::{ClientHandle, ClientId, Event, Frame, Outbox, Router};
 use taky_pki::{CertDb, CertStatus, PkiError};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Instant, MissedTickBehavior};
@@ -37,10 +39,14 @@ use crate::mgmt::MgmtRequest;
 const LGR: &str = "COTServer";
 
 /// Answer to [`HubCmd::Connected`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConnectVerdict {
-    /// Registered; `send_persist` already done. The conn task starts reading.
-    Accepted,
+    /// Registered. The conn task writes `replay` (the kept events, spec §9.5) before any live
+    /// frame, then starts reading.
+    Accepted {
+        /// The connect replay ([`Router::persist_frames`]), not counted in the outbox limits.
+        replay: Vec<Frame>,
+    },
     /// The peer serial is revoked in cert-db: close with `"User banned"`.
     Banned,
 }
@@ -52,7 +58,7 @@ pub enum HubCmd {
     Connected {
         /// The client.
         handle: ClientHandle,
-        /// Verdict (ban check + registration + `send_persist`).
+        /// Verdict (ban check + registration + connect replay).
         reply: oneshot::Sender<ConnectVerdict>,
     },
     /// A parsed event from a connection (after `ClientStats::record_rx`).
@@ -270,8 +276,8 @@ impl Hub {
         }
         let id = handle.id;
         self.router.client_connect(handle);
-        self.router.send_persist(id).await;
-        ConnectVerdict::Accepted
+        let replay = self.router.persist_frames(id).await;
+        ConnectVerdict::Accepted { replay }
     }
 }
 
@@ -605,7 +611,7 @@ mod tests {
         );
         assert_eq!(
             connect_serial(&mut hub, 2, vec![0x0b]).await,
-            ConnectVerdict::Accepted
+            ConnectVerdict::Accepted { replay: vec![] }
         );
 
         // Lost db (cancelled job, re-open failed): refused until the open succeeds.
@@ -618,7 +624,7 @@ mod tests {
         std::fs::remove_dir(&path).unwrap();
         assert_eq!(
             connect_serial(&mut hub, 4, vec![0x0b]).await,
-            ConnectVerdict::Accepted
+            ConnectVerdict::Accepted { replay: vec![] }
         );
         assert!(hub.cert_db.is_some() && hub.cert_db_lost.is_none());
     }
@@ -694,7 +700,7 @@ mod tests {
                     peer_serial: Some(vec![sn]),
                 })
                 .await;
-            assert_eq!(verdict, ConnectVerdict::Accepted);
+            assert_eq!(verdict, ConnectVerdict::Accepted { replay: vec![] });
         }
 
         // Another process takes the lock right after the first revoke (0b).

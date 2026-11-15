@@ -600,9 +600,37 @@ async fn slow_client_dropped_and_removed() {
     assert!(b.router.client(gone).is_none());
     assert_eq!(b.out(gone).closed().as_deref(), Some("peer reset"));
 
-    // send_persist into a full outbox follows the same policy.
-    let late = b.connect_with(6, ClientKind::Cot, TestOutbox::bounded(1));
-    b.router.send_persist(late).await;
-    assert!(b.router.client(late).is_none());
-    assert_eq!(b.out(late).closed().as_deref(), Some(SLOW_CLIENT));
+    // The connect replay is not queued (S1-1): a full outbox does not matter.
+    let late = b.connect_with(6, ClientKind::Cot, TestOutbox::bounded(0));
+    let kept = b.router.persist_snapshot().await.len();
+    assert_eq!(b.router.persist_frames(late).await.len(), kept);
+    assert!(b.router.client(late).is_some() && b.out(late).closed().is_none());
+}
+
+/// S-826 (S1-1): `persist_frames` is `send_persist` without the Outbox — the same frames in
+/// persist order, nothing queued; the own-uid filter is unchanged (a fresh connect gets its
+/// own SA, V039; skipped once identified); an unknown id gets nothing.
+#[tokio::test]
+async fn persist_frames_is_send_persist_without_outbox() {
+    let now = t("2022-01-01T00:00:00");
+    let mut b = Bench::new(-1, now);
+    let c1 = b.connect(1, ClientKind::Cot);
+    b.feed(c1, &plain_event("K-1", "a-f-G", "", now, 60)).await;
+    let own = sa("U-1", "ALPHA", "Red");
+    b.feed(c1, &plain_event("U-1", "a-f-G-U-C", &own, now, 60))
+        .await;
+    b.feed(c1, &plain_event("K-2", "b-m-p", "", now, 60)).await;
+
+    let c2 = b.connect(2, ClientKind::Cot);
+    let frames = b.router.persist_frames(c2).await;
+    assert!(b.out(c2).is_empty());
+    b.router.send_persist(c2).await;
+    assert_eq!(b.out(c2).drain(), frames);
+    b.router.send_persist(c2).await;
+    assert_eq!(b.uids(c2), ["K-1", "U-1", "K-2"]);
+
+    assert_eq!(b.router.persist_frames(c1).await.len(), 2);
+    b.router.send_persist(c1).await;
+    assert_eq!(b.uids(c1), ["K-1", "K-2"]);
+    assert!(b.router.persist_frames(ClientId(77)).await.is_empty());
 }

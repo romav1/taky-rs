@@ -6,9 +6,12 @@
 //! [`Outbox::try_send`] and [`Outbox::close`] never block or await; `close` is idempotent (the
 //! first reason wins). On `Full` the Router closes the client with `"Slow client"`, and the
 //! write half logs that reason (`Socket disconnect: Slow client`).
+//! The connect replay is **not** queued in the outbox: the write half writes it first (same
+//! per-frame [`WRITE_TIMEOUT`]), then the live queue, so the limits count only live frames
+//! queued after registration (S1-1; Python replays into an unbounded buffer, CS §9.5).
 //!
 //! **Connection task:** TLS handshake (≤ [`HANDSHAKE_TIMEOUT`], `"SSL Handshake timeout"`) →
-//! `HubCmd::Connected` (ban check + registration + `send_persist` in the Hub) → read and write
+//! `HubCmd::Connected` (ban check + registration + connect replay in the Hub) → read and write
 //! halves until the first of: EOF (`"Client disconnected"`), I/O error (its text), decoder error
 //! (`"XML Syntax Error"`), `Outbox::close` (its reason), write timeout, server shutdown
 //! (`"Server shutting down"`). Then `Socket disconnect: <reason>` (INFO) and
@@ -77,6 +80,9 @@ pub struct ConnOutbox {
     frames: AtomicUsize,
     /// Bytes of those frames.
     bytes: AtomicUsize,
+    /// Replay frames not yet written + flushed (1 while the connect verdict is pending), for
+    /// [`Outbox::pending`] only; not part of the limits.
+    replay: AtomicUsize,
     /// First close reason.
     reason: OnceLock<String>,
     closed: CancellationToken,
@@ -90,6 +96,7 @@ impl ConnOutbox {
             tx,
             frames: AtomicUsize::new(0),
             bytes: AtomicUsize::new(0),
+            replay: AtomicUsize::new(0),
             reason: OnceLock::new(),
             closed: CancellationToken::new(),
         };
@@ -109,6 +116,22 @@ impl ConnOutbox {
     /// Bytes currently queued (accepted, not yet written + flushed).
     pub fn queued_bytes(&self) -> usize {
         self.bytes.load(Ordering::Acquire)
+    }
+
+    /// Before `HubCmd::Connected`: count the coming replay as pending, so a testkit `settle`
+    /// processed right after the registration also waits for it.
+    fn hold_replay(&self) {
+        self.replay.store(1, Ordering::Release);
+    }
+
+    /// The verdict arrived with `n` replay frames.
+    fn start_replay(&self, n: usize) {
+        self.replay.store(n, Ordering::Release);
+    }
+
+    /// The write half finished one replay frame.
+    fn replayed(&self) {
+        self.replay.fetch_sub(1, Ordering::AcqRel);
     }
 
     /// The write half finished one frame of `len` bytes (written and, if it was the last
@@ -152,7 +175,7 @@ impl Outbox for ConnOutbox {
         if self.closed.is_cancelled() {
             0
         } else {
-            self.frames.load(Ordering::Acquire)
+            self.frames.load(Ordering::Acquire) + self.replay.load(Ordering::Acquire)
         }
     }
 }
@@ -232,6 +255,7 @@ async fn run<S>(
         peer_serial,
     };
     let (reply_tx, reply_rx) = oneshot::channel();
+    outbox.hold_replay();
     let verdict = if ctx
         .hub
         .send(HubCmd::Connected {
@@ -246,8 +270,8 @@ async fn run<S>(
         None
     };
     let (mut rd, mut wr) = tokio::io::split(stream);
-    match verdict {
-        Some(ConnectVerdict::Accepted) => {}
+    let replay = match verdict {
+        Some(ConnectVerdict::Accepted { replay }) => replay,
         Some(ConnectVerdict::Banned) => {
             pylog!(lgr, Level::INFO, "Socket disconnect: {USER_BANNED}");
             outbox.close(USER_BANNED);
@@ -258,7 +282,8 @@ async fn run<S>(
             pylog!(lgr, Level::INFO, "Socket disconnect: {SHUTTING_DOWN}");
             return;
         }
-    }
+    };
+    outbox.start_replay(replay.len());
 
     let mut logger = ctx.log_cot.as_deref().map(|dir| {
         CotLogger::new(
@@ -272,7 +297,7 @@ async fn run<S>(
     });
     let reason = tokio::select! {
         r = read_half(&ctx, id, &stats, &mut rd, &mut logger) => r,
-        r = write_half(&outbox, rx, &mut wr) => r,
+        r = write_half(&outbox, replay, rx, &mut wr) => r,
         () = outbox.closed.cancelled() => outbox.close_reason().unwrap_or(SHUTTING_DOWN).to_owned(),
         () = ctx.shutdown.wait() => SHUTTING_DOWN.to_owned(),
     };
@@ -357,32 +382,67 @@ async fn log_with(slot: &mut Option<CotLogger>, f: impl FnOnce(&mut CotLogger) +
     }
 }
 
-/// Write half: drains the outbox; returns the disconnect reason on a write error/timeout.
+/// Write half: writes the connect replay, then drains the outbox; returns the disconnect
+/// reason on a write error/timeout.
 async fn write_half<W>(
     outbox: &ConnOutbox,
+    replay: Vec<Frame>,
     mut rx: mpsc::UnboundedReceiver<Frame>,
     wr: &mut W,
 ) -> String
 where
     W: AsyncWrite + Unpin,
 {
+    if let Err(reason) = write_replay(outbox, replay, &rx, wr).await {
+        return reason;
+    }
     while let Some(frame) = rx.recv().await {
-        let res = tokio::time::timeout(WRITE_TIMEOUT, async {
-            wr.write_all(&frame).await?;
-            if rx.is_empty() {
-                wr.flush().await?;
-            }
-            Ok::<(), std::io::Error>(())
-        })
-        .await;
-        match res {
-            Ok(Ok(())) => outbox.written(frame.len()),
-            Ok(Err(e)) => return e.to_string(),
-            Err(_) => return WRITE_TIMED_OUT.to_owned(),
+        if let Err(reason) = write_frame(wr, &frame, rx.is_empty()).await {
+            return reason;
         }
+        outbox.written(frame.len());
     }
     // The sender lives in the outbox, which this task holds: not reached in practice.
     SHUTTING_DOWN.to_owned()
+}
+
+/// The connect replay, before any live frame; flushed after the last one unless live frames
+/// follow (they flush). Each frame is released once written.
+async fn write_replay<W>(
+    outbox: &ConnOutbox,
+    replay: Vec<Frame>,
+    rx: &mpsc::UnboundedReceiver<Frame>,
+    wr: &mut W,
+) -> Result<(), String>
+where
+    W: AsyncWrite + Unpin,
+{
+    let n = replay.len();
+    for (i, frame) in replay.into_iter().enumerate() {
+        write_frame(wr, &frame, i + 1 == n && rx.is_empty()).await?;
+        outbox.replayed();
+    }
+    Ok(())
+}
+
+/// Write one frame (and flush if asked) within [`WRITE_TIMEOUT`]; `Err` = disconnect reason.
+async fn write_frame<W>(wr: &mut W, frame: &[u8], flush: bool) -> Result<(), String>
+where
+    W: AsyncWrite + Unpin,
+{
+    let res = tokio::time::timeout(WRITE_TIMEOUT, async {
+        wr.write_all(frame).await?;
+        if flush {
+            wr.flush().await?;
+        }
+        Ok::<(), std::io::Error>(())
+    })
+    .await;
+    match res {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(e)) => Err(e.to_string()),
+        Err(_) => Err(WRITE_TIMED_OUT.to_owned()),
+    }
 }
 
 #[cfg(test)]
@@ -441,6 +501,34 @@ mod tests {
         assert_eq!(ob.close_reason(), Some("Slow client"));
         assert_eq!(ob.try_send(frame(1)), Err(OutboxError::Closed));
         assert_eq!(ob.pending(), 0);
+    }
+
+    /// S-826 (S1-1): the replay is written before live frames queued meanwhile, is not part of
+    /// the limits, and counts as pending (settle) from `hold_replay` until written + flushed.
+    #[tokio::test]
+    async fn replay_written_before_live_frames() {
+        let (ob, rx) = ConnOutbox::new();
+        ob.hold_replay();
+        assert_eq!(ob.pending(), 1);
+        for _ in 0..OUTBOX_MAX_FRAMES {
+            ob.try_send(Arc::from(&b"L"[..])).unwrap();
+        }
+        let replay: Vec<Frame> = vec![Arc::from(&b"R1"[..]), Arc::from(&b"R2"[..])];
+        ob.start_replay(replay.len());
+        assert_eq!(ob.pending(), OUTBOX_MAX_FRAMES + 2);
+        let (mut wr, mut peer) = tokio::io::duplex(1 << 16);
+        let writer = tokio::spawn({
+            let ob = ob.clone();
+            async move { write_half(&ob, replay, rx, &mut wr).await }
+        });
+        let want = format!("R1R2{}", "L".repeat(OUTBOX_MAX_FRAMES));
+        let mut got = vec![0u8; want.len()];
+        peer.read_exact(&mut got).await.unwrap();
+        assert_eq!(got, want.as_bytes());
+        assert_eq!(ob.pending(), 0);
+        drop(peer);
+        ob.try_send(frame(1)).unwrap();
+        assert_eq!(writer.await.unwrap(), "broken pipe");
     }
 
     #[test]

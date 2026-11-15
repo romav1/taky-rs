@@ -3,7 +3,8 @@
 //! **Concurrency contract (ARCHITECTURE §5):** the Router is owned by the single Hub actor
 //! (taky-server, dev02) and used through `&mut self` only; no locks. The only awaits are
 //! [`Persistence`] calls. Events are handled strictly in the order the Hub receives them;
-//! `persist.track` happens before fan-out, `send_persist` is atomic w.r.t. fan-outs.
+//! `persist.track` happens before fan-out, `persist_frames` (connect replay) is atomic w.r.t.
+//! fan-outs.
 //!
 //! Order inside [`Router::on_event`] (ARCHITECTURE §4.1, spec §6/§8/§10–§12): (1) copy to all
 //! monitors unless the source is a monitor (serialized **before** max_ttl, as Python's
@@ -34,6 +35,7 @@
 //!   counted, the client is removed from the table (no close call needed).
 //!
 //! Below the limit nothing is dropped; memory per client is bounded by the Outbox limit.
+//! The connect replay ([`Router::persist_frames`]) bypasses the Outbox and its limits (S1-1).
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -159,22 +161,36 @@ impl Router {
         );
     }
 
-    /// `send_persist` (spec §9.5): send all kept events to `id`, except those whose uid is the
-    /// client's identified uid (always sent on a fresh connect: `user` is still `None`, V039).
-    /// Unknown ids are ignored.
-    pub async fn send_persist(&mut self, id: ClientId) {
+    /// The connect replay (spec §9.5): the frames of all kept events for `id`, in persist
+    /// order, except those whose uid is the client's identified uid (always included on a fresh
+    /// connect: `user` is still `None`, V039). Empty for unknown ids.
+    ///
+    /// The frames are **not** queued in the client's [`crate::Outbox`]: the connection task
+    /// writes them before any live frame, outside the live queue limits (S1-1; Python replays
+    /// into an unbounded buffer, CS §4.1/§9.5). Atomic w.r.t. fan-outs (one Hub command).
+    pub async fn persist_frames(&mut self, id: ClientId) -> Vec<Frame> {
         let Some(own_uid) = self
             .clients
             .get(&id)
             .map(|e| e.user.as_ref().and_then(|u| u.uid.clone()))
         else {
-            return;
+            return Vec::new();
         };
         pylog!(LGR, Level::DEBUG, "Sending persistence objects to {id:?}");
-        for (evt, frame) in self.persist.get_all_frames().await {
-            if own_uid.is_some() && evt.uid == own_uid {
-                continue;
-            }
+        self.persist
+            .get_all_frames()
+            .await
+            .into_iter()
+            .filter(|(evt, _)| own_uid.is_none() || evt.uid != own_uid)
+            .map(|(_, frame)| frame)
+            .collect()
+    }
+
+    /// `send_persist` for sans-IO callers (tests, vector emulation): [`Router::persist_frames`]
+    /// queued through the Outbox, so the slow-client policy applies. The server does not use
+    /// it: the Hub hands the replay to the connection task instead.
+    pub async fn send_persist(&mut self, id: ClientId) {
+        for frame in self.persist_frames(id).await {
             self.send_to(id, &frame);
         }
     }

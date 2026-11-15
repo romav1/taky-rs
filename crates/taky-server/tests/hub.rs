@@ -37,6 +37,15 @@ fn hub() -> Hub {
 }
 
 async fn connect(hub: &mut Hub, id: u64) -> (Arc<ConnOutbox>, mpsc::UnboundedReceiver<Frame>) {
+    let (ob, rx, _replay) = connect_replay(hub, id).await;
+    (ob, rx)
+}
+
+/// [`connect`] that also returns the connect replay of the verdict.
+async fn connect_replay(
+    hub: &mut Hub,
+    id: u64,
+) -> (Arc<ConnOutbox>, mpsc::UnboundedReceiver<Frame>, Vec<Frame>) {
     let (ob, rx) = ConnOutbox::new();
     let (reply, verdict) = oneshot::channel();
     let handle = ClientHandle {
@@ -48,9 +57,10 @@ async fn connect(hub: &mut Hub, id: u64) -> (Arc<ConnOutbox>, mpsc::UnboundedRec
         peer_serial: Some(vec![1, 2, 3]), // no cert-db (plain) ⇒ no ban check
     };
     hub.handle(HubCmd::Connected { handle, reply }).await;
-    let verdict = verdict.await.unwrap();
-    assert!(!matches!(verdict, ConnectVerdict::Banned));
-    (ob, rx)
+    let ConnectVerdict::Accepted { replay } = verdict.await.unwrap() else {
+        panic!("not accepted");
+    };
+    (ob, rx, replay)
 }
 
 async fn send(hub: &mut Hub, from: u64, evt: Event) {
@@ -115,8 +125,9 @@ async fn replay_not_counted_live_still_limited() {
     for i in 0..=OUTBOX_MAX_FRAMES {
         send(&mut hub, 1, event_of("a-f-G", &format!("k{i}"), 0)).await;
     }
-    let (late, _late_rx) = connect(&mut hub, 2).await;
+    let (late, _late_rx, replay) = connect_replay(&mut hub, 2).await;
     assert_eq!((late.close_reason(), late.pending()), (None, 0));
+    assert_eq!(replay.len(), OUTBOX_MAX_FRAMES + 1);
     for i in 0..OUTBOX_MAX_FRAMES {
         send(&mut hub, 1, event(&format!("live{i}"), 0)).await;
     }
