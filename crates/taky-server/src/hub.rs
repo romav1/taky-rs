@@ -458,8 +458,10 @@ struct KickbanResult {
     skipped: Vec<Vec<u8>>,
 }
 
+/// Test hook: panic once in `kickban_blocking` for the cert-db at this path. Keyed by path, not
+/// a global flag, so a kickban of a test running in parallel cannot consume it (S-832).
 #[cfg(test)]
-static KICKBAN_PANIC: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static KICKBAN_PANIC: std::sync::Mutex<Option<PathBuf>> = std::sync::Mutex::new(None);
 
 /// Test hook: run once after the first successful revoke in the cert-db at this path.
 #[cfg(test)]
@@ -474,7 +476,12 @@ static KICKBAN_AFTER_REVOKE: std::sync::Mutex<Option<AfterRevokeHook>> =
 fn kickban_blocking(db: &mut CertDb, name: &str, when: NaiveDateTime) -> KickbanResult {
     let refresh_err = db.refresh();
     #[cfg(test)]
-    if KICKBAN_PANIC.swap(false, Ordering::SeqCst) {
+    if KICKBAN_PANIC
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .take_if(|p| p.as_path() == db.path())
+        .is_some()
+    {
         panic!("injected kickban panic");
     }
     let serials: Vec<Vec<u8>> = db
@@ -602,7 +609,7 @@ mod tests {
         std::fs::remove_file(&path).unwrap();
         std::fs::create_dir(&path).unwrap();
 
-        KICKBAN_PANIC.store(true, Ordering::SeqCst);
+        *KICKBAN_PANIC.lock().unwrap() = Some(path.clone());
         assert_eq!(hub.kickban(Some("bob")).await, json!({"revoked_sns": []}));
         assert!(hub.cert_db.is_some());
         assert_eq!(
