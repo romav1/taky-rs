@@ -611,6 +611,13 @@ mod tests {
 
         *KICKBAN_PANIC.lock().unwrap() = Some(path.clone());
         assert_eq!(hub.kickban(Some("bob")).await, json!({"revoked_sns": []}));
+        // The slot is taken only right before the panic, so this proves the panic branch ran in
+        // this job; a failed revoke (the db path is a directory) also yields [] (S-832).
+        assert_ne!(
+            KICKBAN_PANIC.lock().unwrap().as_deref(),
+            Some(path.as_path()),
+            "injected kickban panic did not fire"
+        );
         assert!(hub.cert_db.is_some());
         assert_eq!(
             connect_serial(&mut hub, 1, vec![0x0a]).await,
